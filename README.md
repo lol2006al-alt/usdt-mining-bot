@@ -1,1 +1,1 @@
-# usdt-mining-app
+# usdt-mining-bot
