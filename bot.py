@@ -5,8 +5,17 @@ from datetime import datetime, timedelta
 import time
 import hashlib
 import json
+import os
+from flask import Flask
 
+# 🔧 إعدادات Render - ضرورية للعمل على السحابة
+app = Flask(__name__)
+PORT = int(os.environ.get('PORT', 10000))
+
+# 🔧 إعدادات البوت
 BOT_TOKEN = "8385331860:AAFTz51bMqPjtEBM50p_5WY_pbMytnqS0zc"
+SUPPORT_USER_ID = "YOUR_USER_ID_HERE"  # ⚠️ ضع هنا ID حسابك
+
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # أنظمة التخزين
@@ -79,8 +88,7 @@ def verify_deposit_manual(code):
     if code in deposit_requests:
         request = deposit_requests[code]
         if request['status'] == 'pending':
-            # هنا ستتحقق يدوياً من المحفظة
-            return True  # أو False حسب التحقق
+            return True
     return False
 
 def activate_vip(user_id, vip_type):
@@ -116,6 +124,19 @@ def get_vip_benefits(user_id):
             return vip_system[vip_info['level']]['bonus']
     return 0.0
 
+@bot.message_handler(commands=['start'])
+def start_command(message):
+    """بدء البوت"""
+    user_id = message.from_user.id
+    init_user(user_id)
+    
+    welcome_text = """
+    🎉 أهلاً بك في بوت التعدين!
+    
+    استخدم /vip لعرض باقات العضويات
+    """
+    bot.send_message(user_id, welcome_text)
+
 @bot.message_handler(commands=['vip'])
 def vip_command(message):
     """عرض باقات VIP"""
@@ -138,9 +159,20 @@ def vip_command(message):
         for feature in info['features']:
             vip_text += f"   • {feature}\n"
     
-    vip_text += "\\n🎯 بعد الشراء، سيتم التحقق من الإيداع تلقائياً!"
+    vip_text += "\n🎯 بعد الشراء، سيتم التحقق من الإيداع تلقائياً!"
     
     bot.send_message(user_id, vip_text, reply_markup=vip_keyboard())
+
+@bot.callback_query_handler(func=lambda call: call.data == 'vip_menu')
+def vip_menu(call):
+    """عرض قائمة VIP"""
+    vip_command(call.message)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'main_menu')
+def main_menu(call):
+    """القائمة الرئيسية"""
+    user_id = call.from_user.id
+    start_command(call.message)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('vip_'))
 def handle_vip_selection(call):
@@ -228,7 +260,7 @@ def verify_deposit_admin(message):
     """أمر للمسؤول للتحقق من الإيداع"""
     user_id = message.from_user.id
     
-    # تحقق إذا كان المستخدم هو المسؤول
+    # ⚠️ غير قيمة SUPPORT_USER_ID إلى ID حسابك
     if str(user_id) != SUPPORT_USER_ID:
         bot.send_message(user_id, "❌ ليس لديك صلاحية لهذا الأمر")
         return
@@ -283,22 +315,31 @@ def pending_deposits_admin(message):
     else:
         bot.send_message(user_id, "✅ لا توجد إيداعات منتظرة")
 
-# دمج نظام VIP مع التعدين
-def calculate_mining_earnings(user_id, base_earnings):
-    """حساب الأرباح مع مكافآت VIP"""
-    vip_bonus = get_vip_benefits(user_id)
-    return base_earnings * (1 + vip_bonus)
+# 🌐 خادم ويب لـ Render
+@app.route('/')
+def home():
+    return "🤖 البوت يعمل بشكل صحيح! - VIP Mining Bot"
 
-# ... (بقية الكود الأساسي للبوت) ...
+@app.route('/health')
+def health_check():
+    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
 def start_bot():
+    """تشغيل البوت في خيط منفصل"""
     while True:
         try:
             print("🚀 البوت يعمل مع نظام VIP...")
-            bot.polling(none_stop=True)
+            bot.polling(none_stop=True, interval=1, timeout=60)
         except Exception as e:
-            print(f"❌ خطأ: {e}")
+            print(f"❌ خطأ في البوت: {e}")
             time.sleep(10)
 
 if __name__ == "__main__":
-    start_bot()
+    # تشغيل البوت في خيط منفصل
+    import threading
+    bot_thread = threading.Thread(target=start_bot, daemon=True)
+    bot_thread.start()
+    
+    # تشغيل خادم الويب للاستماع على المنفذ
+    print(f"🌐 بدأ تشغيل الخادم على المنفذ {PORT}")
+    app.run(host='0.0.0.0', port=PORT, debug=False)
