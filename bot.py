@@ -1,61 +1,90 @@
+from flask import Flask, request
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-import random
-from datetime import datetime, timedelta
-import time
 import sqlite3
-import json
-import os
-import logging
-from flask import Flask, request
 import threading
-import requests
+import time
+from datetime import datetime, timedelta
+import os
+import random
 
-# 🔧 إعدادات Render
+# تكوين الأساسيات
+BOT_TOKEN = os.environ.get('BOT_TOKEN')
+WEBHOOK_URL = os.environ.get('WEBHOOK_URL')
+PORT = int(os.environ.get('PORT', 5000))
+
+bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
-PORT = int(os.environ.get('PORT', 10000))
 
-# 🔧 إعدادات البوت
-BOT_TOKEN = "8385331860:AAFTz51bMqPjtEBM50p_5WY_pbMytnqS0zc"
-SUPPORT_USERNAME = "Trust_wallet_Support_3"  # ✅ تم التصحيح
+# 🔐 إعدادات المشرفين - أنت المسؤول الوحيد
+ADMIN_IDS = [8400225549]  # ✅ أنت المشرف الرئيسي!
 
-bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
-WEBHOOK_URL = f"https://usdt-mining-bot-wmvf.onrender.com/{BOT_TOKEN}"
-
-# 🗄️ قاعدة البيانات
+# 🔧 تهيئة قاعدة البيانات
 def init_db():
     conn = sqlite3.connect('bot_database.db', check_same_thread=False)
     cursor = conn.cursor()
     
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
-            user_id TEXT PRIMARY KEY,
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            first_name TEXT,
+            last_name TEXT,
             balance REAL DEFAULT 0.0,
-            mining_earnings REAL DEFAULT 0.0,
             referrals_count INTEGER DEFAULT 0,
-            referral_list TEXT DEFAULT '[]',
-            referral_earnings REAL DEFAULT 0.0,
-            referral_link TEXT,
-            total_deposited REAL DEFAULT 0.0,
-            vip_level TEXT,
-            vip_expiry TEXT,
+            referrer_id INTEGER,
+            vip_level INTEGER DEFAULT 0,
+            vip_expiry TIMESTAMP,
             games_played_today INTEGER DEFAULT 0,
-            max_games_daily INTEGER DEFAULT 3,
-            withdraw_eligible INTEGER DEFAULT 0,
-            last_mining_time TEXT,
-            last_active TEXT,
-            language TEXT DEFAULT 'ar',
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            total_games_played INTEGER DEFAULT 0,
+            total_earned REAL DEFAULT 0.0,
+            total_deposits REAL DEFAULT 0.0,  -- إجمالي الإيداعات
+            games_counter INTEGER DEFAULT 0,
+            last_daily_bonus TIMESTAMP,
+            registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
     
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS completed_referrals (
+        CREATE TABLE IF NOT EXISTS referrals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            referrer_id TEXT,
-            referred_id TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(referrer_id, referred_id)
+            referrer_id INTEGER,
+            referred_id INTEGER,
+            bonus_given BOOLEAN DEFAULT FALSE,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS games (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            game_type TEXT,
+            bet_amount REAL,
+            win_amount REAL,
+            result TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            type TEXT,
+            amount REAL,
+            description TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS deposits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            amount REAL,
+            status TEXT DEFAULT 'completed',
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
     
@@ -64,62 +93,30 @@ def init_db():
 
 db_connection = init_db()
 
-# 🎯 نظام VIP
-vip_system = {
-    "BRONZE": {
-        "name": "🟢 VIP برونزي",
-        "price": 5.0,
-        "bonus": 0.10,
-        "features": ["+10% أرباح تعدين", "دعم سريع", "مهام إضافية", "ألعاب حصرية"],
-        "duration": 30,
-        "color": "🟢",
-        "daily_bonus": 0.5
-    },
-    "SILVER": {
-        "name": "🔵 VIP فضى", 
-        "price": 10.0,
-        "bonus": 0.25,
-        "features": ["+25% أرباح تعدين", "دعم مميز", "مهام حصرية", "مكافآت يومية"],
-        "duration": 30,
-        "color": "🔵",
-        "daily_bonus": 1.0
-    },
-    "GOLD": {
-        "name": "🟡 VIP ذهبي",
-        "price": 20.0, 
-        "bonus": 0.50,
-        "features": ["+50% أرباح تعدين", "دعم فوري", "مكافآت يومية", "خصومات حصرية"],
-        "duration": 30,
-        "color": "🟡",
-        "daily_bonus": 2.0
-    }
-}
-
-MAIN_WALLET = "0xfc712c9985507a2eb44df1ddfe7f09ff7613a19b"
-
-# 🔧 دوال قاعدة البيانات
+# 🔧 دوال مساعدة
 def get_user(user_id):
     cursor = db_connection.cursor()
-    cursor.execute("SELECT * FROM users WHERE user_id = ?", (str(user_id),))
+    cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
     user = cursor.fetchone()
+    
     if user:
         return {
             'user_id': user[0],
-            'balance': user[1],
-            'mining_earnings': user[2],
-            'referrals_count': user[3],
-            'referral_list': json.loads(user[4]),
-            'referral_earnings': user[5],
-            'referral_link': user[6],
-            'total_deposited': user[7],
-            'vip_level': user[8],
-            'vip_expiry': user[9],
-            'games_played_today': user[10],
-            'max_games_daily': user[11],
-            'withdraw_eligible': bool(user[12]),
-            'last_mining_time': user[13],
-            'last_active': user[14],
-            'language': user[15]
+            'username': user[1],
+            'first_name': user[2],
+            'last_name': user[3],
+            'balance': user[4],
+            'referrals_count': user[5],
+            'referrer_id': user[6],
+            'vip_level': user[7],
+            'vip_expiry': user[8],
+            'games_played_today': user[9],
+            'total_games_played': user[10],
+            'total_earned': user[11],
+            'total_deposits': user[12],  # إجمالي الإيداعات
+            'games_counter': user[13],
+            'last_daily_bonus': user[14],
+            'registration_date': user[15]
         }
     return None
 
@@ -127,706 +124,806 @@ def save_user(user_data):
     cursor = db_connection.cursor()
     cursor.execute('''
         INSERT OR REPLACE INTO users 
-        (user_id, balance, mining_earnings, referrals_count, referral_list, referral_earnings, 
-         referral_link, total_deposited, vip_level, vip_expiry, games_played_today, 
-         max_games_daily, withdraw_eligible, last_mining_time, last_active, language)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (user_id, username, first_name, last_name, balance, referrals_count, 
+         referrer_id, vip_level, vip_expiry, games_played_today, total_games_played, 
+         total_earned, total_deposits, games_counter, last_daily_bonus)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         user_data['user_id'],
-        user_data['balance'],
-        user_data['mining_earnings'],
-        user_data['referrals_count'],
-        json.dumps(user_data['referral_list']),
-        user_data['referral_earnings'],
-        user_data['referral_link'],
-        user_data['total_deposited'],
-        user_data['vip_level'],
-        user_data['vip_expiry'],
-        user_data['games_played_today'],
-        user_data['max_games_daily'],
-        int(user_data['withdraw_eligible']),
-        user_data['last_mining_time'],
-        user_data['last_active'],
-        user_data['language']
+        user_data.get('username'),
+        user_data.get('first_name'),
+        user_data.get('last_name'),
+        user_data.get('balance', 0.0),
+        user_data.get('referrals_count', 0),
+        user_data.get('referrer_id'),
+        user_data.get('vip_level', 0),
+        user_data.get('vip_expiry'),
+        user_data.get('games_played_today', 0),
+        user_data.get('total_games_played', 0),
+        user_data.get('total_earned', 0.0),
+        user_data.get('total_deposits', 0.0),  # حفظ إجمالي الإيداعات
+        user_data.get('games_counter', 0),
+        user_data.get('last_daily_bonus')
     ))
     db_connection.commit()
 
-def init_user(user_id):
-    user = get_user(user_id)
-    if not user:
-        user_data = {
-            'user_id': str(user_id),
-            'balance': 0.0,
-            'mining_earnings': 0.0,
-            'referrals_count': 0,
-            'referral_list': [],
-            'referral_earnings': 0.0,
-            'referral_link': f"https://t.me/BNBMini1Bot?start=ref_{user_id}",
-            'total_deposited': 0.0,
-            'vip_level': None,
-            'vip_expiry': None,
-            'games_played_today': 0,
-            'max_games_daily': 3,
-            'withdraw_eligible': False,
-            'last_mining_time': None,
-            'last_active': datetime.now().isoformat(),
-            'language': 'ar'
-        }
-        save_user(user_data)
-        return user_data
-    return user
-
-# 🔄 نظام منع النوم
-def keep_alive():
-    while True:
-        try:
-            requests.get("https://usdt-mining-bot-wmvf.onrender.com/health", timeout=10)
-            print(f"🔄 pinged at {datetime.now()}")
-        except Exception as e:
-            print(f"❌ ping failed: {e}")
-        time.sleep(120)
-
-# 🎮 نظام الألعاب
-GAMES_SYSTEM = {
-    "slots": {"name": "🎰 سلات ماشين", "base_reward": 2.0, "vip_bonus": 0.5},
-    "shooting": {"name": "🎯 الرماية", "base_reward": 2.0, "vip_bonus": 0.5},
-    "mining_race": {"name": "🏆 سباق التعدين", "base_reward": 2.0, "vip_bonus": 0.5},
-    "price_prediction": {"name": "📈 توقع الأسعار", "base_reward": 2.0, "vip_bonus": 0.5},
-    "mining_cards": {"name": "🃏 أوراق التعدين", "base_reward": 2.0, "vip_bonus": 0.5}
-}
-
-# 🛡️ نظام الأمان
-def log_transaction(user_id, trans_type, amount, description="", status="completed"):
-    cursor = db_connection.cursor()
-    cursor.execute('''
-        INSERT INTO transactions (user_id, type, amount, description, status)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (str(user_id), trans_type, amount, description, status))
-    db_connection.commit()
-
-# 🔧 الدوال الرئيسية
-def vip_mining_rewards(user_id):
-    user = get_user(user_id)
-    if user and user['vip_level']:
-        base_reward = 3.0
-        vip_info = vip_system[user['vip_level']]
-        reward = base_reward * (1 + vip_info['bonus'])
-        return round(reward, 2)
-    return 0.0
-
-def can_play_game(user_id):
+def add_balance(user_id, amount, description="", is_deposit=False):
     user = get_user(user_id)
     if user:
-        return user['games_played_today'] < user['max_games_daily']
-    return False
-
-def play_game(user_id, game_id):
-    if can_play_game(user_id):
-        user = get_user(user_id)
-        game_info = GAMES_SYSTEM[game_id]
-        reward = game_info['base_reward']
+        user['balance'] += amount
+        user['total_earned'] += amount
         
-        if user['vip_level']:
-            reward += vip_system[user['vip_level']]['daily_bonus']
+        # إذا كان إيداعاً، نزيد إجمالي الإيداعات
+        if is_deposit:
+            user['total_deposits'] += amount
         
-        user['games_played_today'] += 1
-        user['balance'] += reward
-        user['last_active'] = datetime.now().isoformat()
         save_user(user)
         
-        log_transaction(user_id, "game_reward", reward, f"ربح من لعبة {game_info['name']}")
-        return reward
-    return 0
-
-def check_withdraw_eligibility(user_id):
-    user = get_user(user_id)
-    if user and user['balance'] >= 100 and user['referrals_count'] >= 15:
-        user['withdraw_eligible'] = True
-        save_user(user)
-        return True
-    return False
-
-def is_referral_completed(referrer_id, referred_id):
-    cursor = db_connection.cursor()
-    cursor.execute(
-        "SELECT id FROM completed_referrals WHERE referrer_id = ? AND referred_id = ?",
-        (str(referrer_id), str(referred_id))
-    )
-    return cursor.fetchone() is not None
-
-def mark_referral_completed(referrer_id, referred_id):
-    cursor = db_connection.cursor()
-    try:
+        # تسجيل المعاملة
+        cursor = db_connection.cursor()
+        transaction_type = 'deposit' if is_deposit else 'bonus'
         cursor.execute(
-            "INSERT INTO completed_referrals (referrer_id, referred_id) VALUES (?, ?)",
-            (str(referrer_id), str(referred_id))
+            "INSERT INTO transactions (user_id, type, amount, description) VALUES (?, ?, ?, ?)",
+            (user_id, transaction_type, amount, description)
         )
+        
+        # إذا كان إيداعاً، نسجله في جدول الإيداعات
+        if is_deposit:
+            cursor.execute(
+                "INSERT INTO deposits (user_id, amount) VALUES (?, ?)",
+                (user_id, amount)
+            )
+        
         db_connection.commit()
-        return True
-    except sqlite3.IntegrityError:
+
+def add_referral(referrer_id, referred_id):
+    cursor = db_connection.cursor()
+    cursor.execute("SELECT * FROM referrals WHERE referrer_id = ? AND referred_id = ?", 
+                  (referrer_id, referred_id))
+    if cursor.fetchone():
         return False
-
-def handle_referral_join(new_user_id, referrer_id):
-    if str(referrer_id) == str(new_user_id):
-        return
     
-    if is_referral_completed(referrer_id, new_user_id):
-        return
-    
-    referrer = get_user(referrer_id)
-    if referrer:
-        referral_bonus = 1.5
-        
-        referrer['referrals_count'] += 1
-        referrer['referral_list'].append(new_user_id)
-        referrer['max_games_daily'] += 1
-        referrer['balance'] += referral_bonus
-        referrer['referral_earnings'] += referral_bonus
-        referrer['last_active'] = datetime.now().isoformat()
-        save_user(referrer)
-        
-        mark_referral_completed(referrer_id, new_user_id)
-        log_transaction(referrer_id, "referral_bonus", referral_bonus, "مكافأة إحالة")
-        
-        try:
-            bot.send_message(
-                referrer_id,
-                f"🎉 **تمت إحالة جديدة!**\n\n"
-                f"👤 دخل مستخدم جديد عبر رابطك\n"
-                f"💰 ربحت: {referral_bonus} USDT\n"
-                f"🎮 حصلت على محاولة إضافية في الألعاب\n"
-                f"📊 إجمالي الإحالات: {referrer['referrals_count']}/15\n"
-                f"💵 أرباح الإحالات: {referrer['referral_earnings']} USDT"
-            )
-        except Exception as e:
-            print(f"Error sending referral notification: {e}")
-        
-        check_withdraw_eligibility(referrer_id)
+    cursor.execute("INSERT INTO referrals (referrer_id, referred_id) VALUES (?, ?)", 
+                  (referrer_id, referred_id))
+    cursor.execute("UPDATE users SET referrals_count = referrals_count + 1 WHERE user_id = ?", 
+                  (referrer_id,))
+    db_connection.commit()
+    return True
 
-# 🎨 واجهات المستخدم
-def main_keyboard():
+def get_user_referrals(user_id):
+    cursor = db_connection.cursor()
+    cursor.execute('''
+        SELECT u.user_id, u.first_name, u.username, r.timestamp 
+        FROM referrals r 
+        JOIN users u ON r.referred_id = u.user_id 
+        WHERE r.referrer_id = ?
+    ''', (user_id,))
+    return cursor.fetchall()
+
+# 🎯 إنشاء الأزرار
+def create_main_menu():
     keyboard = InlineKeyboardMarkup(row_width=2)
-    buttons = [
-        InlineKeyboardButton("⚡ التعدين", callback_data="mining"),
-        InlineKeyboardButton("🎮 الألعاب", callback_data="games"),
-        InlineKeyboardButton("💰 الإيداع", callback_data="deposit"),
-        InlineKeyboardButton("👥 الإحالات", callback_data="referral"),
-        InlineKeyboardButton("🎖️ نظام VIP", callback_data="vip_menu"),
-        InlineKeyboardButton("📊 إحصائيات", callback_data="stats"),
-        InlineKeyboardButton("📞 الدعم", callback_data="support"),
-        InlineKeyboardButton("🌐 اللغة", callback_data="language")
-    ]
-    
-    for i in range(0, len(buttons), 2):
-        if i + 1 < len(buttons):
-            keyboard.add(buttons[i], buttons[i + 1])
-        else:
-            keyboard.add(buttons[i])
-    
+    keyboard.add(
+        InlineKeyboardButton("🎮 الألعاب (3 محاولات)", callback_data="games_menu"),
+        InlineKeyboardButton("📊 الملف الشخصي", callback_data="profile")
+    )
+    keyboard.add(
+        InlineKeyboardButton("👥 الإحالات (+1 محاولة)", callback_data="referral"),
+        InlineKeyboardButton("💰 سحب رصيد", callback_data="withdraw")
+    )
+    keyboard.add(
+        InlineKeyboardButton("💎 باقات VIP", callback_data="vip_packages"),
+        InlineKeyboardButton("🆘 الدعم الفني", url="https://t.me/Trust_wallet_Support_3")
+    )
     return keyboard
 
-def vip_keyboard():
+def create_games_menu():
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        InlineKeyboardButton("🎰 سلوتس", callback_data="game_slots"),
+        InlineKeyboardButton("🎲 النرد", callback_data="game_dice")
+    )
+    keyboard.add(
+        InlineKeyboardButton("⚽ كرة القدم", callback_data="game_football"),
+        InlineKeyboardButton("🏀 السلة", callback_data="game_basketball")
+    )
+    keyboard.add(
+        InlineKeyboardButton("🎯 السهم", callback_data="game_darts"),
+        InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu")
+    )
+    return keyboard
+
+def create_vip_keyboard():
     keyboard = InlineKeyboardMarkup(row_width=1)
-    
-    for vip_type, info in vip_system.items():
-        keyboard.add(
-            InlineKeyboardButton(
-                f"{info['name']} - {info['price']} USDT", 
-                callback_data=f"vip_{vip_type}"
-            )
-        )
-    
+    keyboard.add(InlineKeyboardButton("🟢 VIP برونزي - 5.0 USDT", callback_data="vip_bronze"))
+    keyboard.add(InlineKeyboardButton("🔵 VIP فضى - 10.0 USDT", callback_data="vip_silver"))
+    keyboard.add(InlineKeyboardButton("🟡 VIP ذهبي - 20.0 USDT", callback_data="vip_gold"))
     keyboard.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
     return keyboard
 
-def games_keyboard(user_id):
-    user = get_user(user_id)
-    keyboard = InlineKeyboardMarkup(row_width=2)
-    
-    games = [
-        ("🎰 سلات ماشين", "slots"),
-        ("🎯 الرماية", "shooting"),
-        ("🏆 سباق التعدين", "mining_race"),
-        ("📈 توقع الأسعار", "price_prediction"),
-        ("🃏 أوراق التعدين", "mining_cards")
-    ]
-    
-    for game_name, game_id in games:
-        keyboard.add(InlineKeyboardButton(game_name, callback_data=f"game_{game_id}"))
-    
-    remaining_games = user['max_games_daily'] - user['games_played_today']
-    keyboard.add(InlineKeyboardButton(f"🔄 المحاولات: {remaining_games}", callback_data="games_info"))
-    keyboard.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
-    
+def create_withdraw_keyboard():
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton("💳 تأكيد استخدام BEP20", callback_data="confirm_bep20"))
+    keyboard.add(InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
     return keyboard
 
-# 📱 الرسائل المحسنة
-def get_main_menu_text(user_id):
-    user = get_user(user_id)
+def create_referral_keyboard(user_id):
+    keyboard = InlineKeyboardMarkup()
+    bot_username = (bot.get_me()).username
+    referral_link = f"https://t.me/{bot_username}?start={user_id}"
     
-    return f"""🚀 **BNB Mini Bot - منصة التعدين الاحترافية** 🚀
+    keyboard.add(InlineKeyboardButton("📤 مشاركة الرابط", 
+                url=f"https://t.me/share/url?url={referral_link}&text=انضم إلى هذا البوت الرائع واحصل على 1.0 USDT مجاناً! 🎮"))
+    
+    keyboard.add(InlineKeyboardButton("🔗 نسخ الرابط", callback_data="copy_link"))
+    keyboard.add(InlineKeyboardButton("📊 إحالاتي", callback_data="my_referrals"))
+    keyboard.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
+    
+    return keyboard, referral_link
 
-💼 **محفظتك الشخصية:**
-💰 الرصيد: `{user['balance']:.1f} USDT`
-⚡ أرباح التعدين: `{user['mining_earnings']:.1f} USDT`
-👥 أرباح الإحالات: `{user['referral_earnings']:.1f} USDT`
+# 🎮 دوال الألعاب
+def play_slots_game(user_id):
+    symbols = ["🍒", "🍋", "🍊", "🍇", "🔔", "💎"]
+    result = [random.choice(symbols) for _ in range(3)]
+    return result
 
-🎯 **إحصائياتك الحالية:**
-🎮 محاولات الألعاب: `{user['games_played_today']}/{user['max_games_daily']}`
-📊 عدد الإحالات: `{user['referrals_count']}/15`
-🎖️ العضوية: `{vip_system[user['vip_level']]['name'] if user['vip_level'] else '🆓 أساسية'}`
+def play_dice_game(user_id):
+    user_dice = random.randint(1, 6)
+    bot_dice = random.randint(1, 6)
+    result = "فوز" if user_dice > bot_dice else "خسارة" if user_dice < bot_dice else "تعادل"
+    return user_dice, bot_dice, result
 
-⭐ **المزايا الحصرية:**
-• 🎮 5 ألعاب مختلفة بربح 2 USDT لكل لعبة
-• 👥 مكافأة 1.5 USDT لكل إحالة جديدة
-• ⚡ تعدين يومي حصري لأعضاء VIP
-• 🛡️ نظام آمن ومحمي 100%
+def play_football_game(user_id):
+    outcomes = ["هدف 🥅", "إصابة القائم 🚩", "حارس يصد ⛔"]
+    result = random.choices(outcomes, k=3)
+    return result
 
-🎪 **اختر من القائمة أدناه للبدء:**"""
+def play_basketball_game(user_id):
+    shots = []
+    for i in range(3):
+        shot_type = "🎯 تسجيل ✅" if random.random() > 0.3 else "🎯 أخطأت ❌"
+        shots.append(shot_type)
+    return shots
 
-# 📊 Handlers الرئيسية
+def play_darts_game(user_id):
+    scores = []
+    for i in range(3):
+        score = random.randint(10, 50)
+        scores.append(f"🎯 نقاط: {score}")
+    return scores
+
+# 🎯 الأوامر الأساسية
 @bot.message_handler(commands=['start'])
 def start_command(message):
-    try:
-        user_id = message.from_user.id
-        init_user(user_id)
+    user_id = message.from_user.id
+    user = get_user(user_id)
+    
+    if not user:
+        referrer_id = None
+        referral_bonus = 0
         
         if len(message.text.split()) > 1:
-            referral_code = message.text.split()[1]
-            if referral_code.startswith('ref_'):
-                referrer_id = referral_code.replace('ref_', '')
-                handle_referral_join(user_id, referrer_id)
+            try:
+                referrer_id = int(message.text.split()[1])
+                referrer_user = get_user(referrer_id)
+                
+                if referrer_user and referrer_id != user_id:
+                    if add_referral(referrer_id, user_id):
+                        add_balance(user_id, 1.0, "مكافأة انضمام بالإحالة")
+                        referrer_user['games_played_today'] = max(0, referrer_user['games_played_today'] - 1)
+                        save_user(referrer_user)
+                        referral_bonus = 1.0
+            except:
+                referrer_id = None
         
-        user = get_user(user_id)
-        welcome_text = get_main_menu_text(user_id)
+        new_user = {
+            'user_id': user_id,
+            'username': message.from_user.username,
+            'first_name': message.from_user.first_name,
+            'last_name': message.from_user.last_name,
+            'referrer_id': referrer_id,
+            'balance': 0.0 + referral_bonus,
+            'games_played_today': 3,
+            'total_deposits': 0.0  # بداية إجمالي الإيداعات بصفر
+        }
+        save_user(new_user)
+        user = new_user
         
-        bot.send_message(user_id, welcome_text, reply_markup=main_keyboard())
-        log_transaction(user_id, "bot_start", 0, "بدء استخدام البوت")
-        
-    except Exception as e:
-        print(f"Error in start_command: {e}")
+        welcome_text = f"""
+        🎮 أهلاً وسهلاً {message.from_user.first_name}!
 
-@bot.callback_query_handler(func=lambda call: call.data == 'main_menu')
-def main_menu(call):
-    try:
-        user_id = call.from_user.id
-        welcome_text = get_main_menu_text(user_id)
-        
+        🎯 لديك 3 محاولات لعب مجانية
+        💰 مكافأة الإحالة: 1.0 USDT لكل صديق
+        👥 كل إحالة تمنحك محاولة إضافية
+
+        🏆 اربح 5 USDT كل 3 محاولات!
+        """
+    else:
+        welcome_text = f"""
+        🎮 مرحباً بعودتك {message.from_user.first_name}!
+
+        💰 رصيدك: {user['balance']} USDT
+        👥 عدد الإحالات: {user['referrals_count']}
+        🎯 المحاولات المتبقية: {3 - user['games_played_today']}
+        🏆 مستوى VIP: {user['vip_level']}
+        """
+    
+    bot.send_message(message.chat.id, welcome_text, reply_markup=create_main_menu())
+
+# 🎯 معالجة الأزرار
+@bot.callback_query_handler(func=lambda call: True)
+def handle_callbacks(call):
+    user_id = call.from_user.id
+    user = get_user(user_id)
+    
+    if call.data == "main_menu":
         bot.edit_message_text(
-            welcome_text,
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
-            reply_markup=main_keyboard()
+            text="🎮 **القائمة الرئيسية**\nاختر ما تريد من الأزرار أدناه:",
+            reply_markup=create_main_menu(),
+            parse_mode='Markdown'
         )
-    except Exception as e:
-        print(f"Error in main_menu: {e}")
+    
+    elif call.data == "games_menu":
+        remaining_games = 3 - user['games_played_today']
+        games_text = f"""
+        🎮 **قائمة الألعاب المتاحة**
 
-@bot.callback_query_handler(func=lambda call: call.data == 'mining')
-def mining_handler(call):
-    try:
-        user_id = call.from_user.id
-        user = get_user(user_id)
+        🎯 المحاولات المتبقية: {remaining_games}/3
+        💰 الربح: 5 USDT كل 3 محاولات
+
+        🎰 **السلوتس** - اختر الرموز واربح
+        🎲 **النرد** - تحدى البوت واربح
+        ⚽ **كرة القدم** - سجل الأهداف
+        🏀 **السلة** - أحرز النقاط
+        🎯 **السهام** - اصب الهدف
+
+        💎 **كل 3 محاولات تربح 5 USDT!**
+        """
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=games_text,
+            reply_markup=create_games_menu(),
+            parse_mode='Markdown'
+        )
+    
+    elif call.data.startswith("game_"):
+        if user['games_played_today'] >= 3:
+            bot.answer_callback_query(call.id, "❌ استنفدت محاولاتك! ادعُ أصدقاءً لمحاولات إضافية")
+            return
         
-        if not user['vip_level']:
+        game_type = call.data.replace("game_", "")
+        game_name = get_game_name(game_type)
+        
+        if game_type == "slots":
+            result = play_slots_game(user_id)
+            game_display = " | ".join(result)
+            result_text = f"🎰 **السلوتس**:\n{game_display}\n\n"
+            
+        elif game_type == "dice":
+            user_dice, bot_dice, result = play_dice_game(user_id)
+            result_text = f"🎲 **النرد**:\nنردك: {user_dice} | نرد البوت: {bot_dice}\nالنتيجة: {result}\n\n"
+            
+        elif game_type == "football":
+            result = play_football_game(user_id)
+            result_text = f"⚽ **كرة القدم**:\n" + "\n".join(result) + "\n\n"
+            
+        elif game_type == "basketball":
+            result = play_basketball_game(user_id)
+            result_text = f"🏀 **السلة**:\n" + "\n".join(result) + "\n\n"
+            
+        elif game_type == "darts":
+            result = play_darts_game(user_id)
+            result_text = f"🎯 **السهام**:\n" + "\n".join(result) + "\n\n"
+        
+        user['games_played_today'] += 1
+        user['total_games_played'] += 1
+        user['games_counter'] += 1
+        
+        win_amount = 0.0
+        if user['games_counter'] >= 3:
+            win_amount = 5.0
+            user['games_counter'] = 0
+            result_text += f"🎉 **مبروك! أكملت 3 محاولات وحصلت على 5.0 USDT!**\n\n"
+        else:
+            remaining = 3 - user['games_counter']
+            result_text += f"📊 **تقدمك: {user['games_counter']}/3 محاولات**\n"
+            result_text += f"🎯 **محاولاتك القادمة: {remaining} للحصول على 5.0 USDT**\n\n"
+        
+        if win_amount > 0:
+            user['balance'] += win_amount
+            user['total_earned'] += win_amount
+        
+        save_user(user)
+        
+        result_text += f"💰 **رصيدك الحالي: {user['balance']} USDT**\n"
+        result_text += f"🎯 **المحاولات المتبقية: {3 - user['games_played_today']}**"
+        
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=result_text,
+            reply_markup=create_main_menu(),
+            parse_mode='Markdown'
+        )
+    
+    elif call.data == "vip_packages":
+        vip_text = """
+        🎖️ **نظام العضويات VIP - ترقى لمستوى أفضل** 🎖️
+
+        اختر الباقة المناسبة وارتقِ بتجربتك:
+
+        🟢 **🟢 VIP برونزي**
+        💵 السعر: 5.0 USDT
+        📈 المكافأة: +10% أرباح تعدين
+        🎁 المكافأة اليومية: 0.5 USDT
+        ⭐ المزايا:
+           • +10% أرباح تعدين
+           • دعم سريع
+           • مهام إضافية
+           • ألعاب حصرية
+
+        🔵 **🔵 VIP فضى**
+        💵 السعر: 10.0 USDT
+        📈 المكافأة: +25% أرباح تعدين
+        🎁 المكافأة اليومية: 1.0 USDT
+        ⭐ المزايا:
+           • +25% أرباح تعدين
+           • دعم مميز
+           • مهام حصرية
+           • مكافآت يومية
+
+        🟡 **🟡 VIP ذهبي**
+        💵 السعر: 20.0 USDT
+        📈 المكافأة: +50% أرباح تعدين
+        🎁 المكافأة اليومية: 2.0 USDT
+        ⭐ المزايا:
+           • +50% أرباح تعدين
+           • دعم فوري
+           • مكافآت يومية
+           • خصومات حصرية
+
+        🚀 **بعد الشراء، سيتم التحقق من الإيداع تلقائياً!**
+        """
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=vip_text,
+            reply_markup=create_vip_keyboard(),
+            parse_mode='Markdown'
+        )
+    
+    elif call.data.startswith("vip_"):
+        vip_type = call.data.replace("vip_", "")
+        vip_info = get_vip_details(vip_type)
+        
+        if not vip_info:
+            bot.answer_callback_query(call.id, "❌ نوع VIP غير صحيح")
+            return
+        
+        if user['balance'] < vip_info['price']:
+            bot.answer_callback_query(call.id, f"❌ رصيدك غير كافٍ! السعر: {vip_info['price']} USDT")
+            return
+        
+        confirmation_text = f"""
+        🎖️ **تأكيد شراء {vip_info['name']}**
+
+        💵 **السعر:** {vip_info['price']} USDT
+        📈 **المكافأة:** {vip_info['mining_bonus']}
+        🎁 **المكافأة اليومية:** {vip_info['daily_bonus']} USDT
+
+        ⭐ **المزايا:**
+        {chr(10).join(['   • ' + feature for feature in vip_info['features']])}
+
+        💰 **رصيدك الحالي:** {user['balance']} USDT
+        💎 **الرصيد بعد الشراء:** {user['balance'] - vip_info['price']} USDT
+
+        ✅ **هل تريد المتابعة؟**
+        """
+        
+        keyboard = InlineKeyboardMarkup()
+        keyboard.add(
+            InlineKeyboardButton("✅ تأكيد الشراء", callback_data=f"confirm_vip_{vip_type}"),
+            InlineKeyboardButton("❌ إلغاء", callback_data="vip_packages")
+        )
+        
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=confirmation_text,
+            reply_markup=keyboard,
+            parse_mode='Markdown'
+        )
+    
+    elif call.data.startswith("confirm_vip_"):
+        vip_type = call.data.replace("confirm_vip_", "")
+        vip_info = get_vip_details(vip_type)
+        
+        if not vip_info:
+            return
+        
+        user['balance'] -= vip_info['price']
+        vip_levels = {"bronze": 1, "silver": 2, "gold": 3}
+        user['vip_level'] = vip_levels.get(vip_type, 1)
+        user['vip_expiry'] = (datetime.now() + timedelta(days=30)).isoformat()
+        user['last_daily_bonus'] = datetime.now().isoformat()
+        
+        save_user(user)
+        
+        success_text = f"""
+        🎉 **تم تفعيل {vip_info['name']} بنجاح!**
+
+        💎 **المزايا المفعلة:**
+        📈 {vip_info['mining_bonus']}
+        🎁 مكافأة يومية: {vip_info['daily_bonus']} USDT
+        ⭐ {chr(10).join(['• ' + feature for feature in vip_info['features']])}
+
+        💰 **رصيدك الحالي:** {user['balance']} USDT
+        🚀 **سيتم إيداع المكافأة اليومية تلقائياً!**
+
+        **استمتع بالمزايا الحصرية! 🏆**
+        """
+        
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=success_text,
+            reply_markup=create_main_menu(),
+            parse_mode='Markdown'
+        )
+        
+        bot.answer_callback_query(call.id, f"✅ تم تفعيل {vip_info['name']} بنجاح!")
+    
+    elif call.data == "withdraw":
+        # ✅ الشروط الجديدة للسحب
+        if user['balance'] < 100.0:
             bot.answer_callback_query(
-                call.id,
-                "🚫 التعدين حصري لأعضاء VIP فقط!\n\nترقى إلى العضوية من قسم 🎖️ نظام VIP لفتح هذه الميزة الحصرية!",
-                show_alert=True
+                call.id, 
+                f"❌ الحد الأدنى للسحب 100 USDT! رصيدك: {user['balance']} USDT"
             )
             return
         
-        now = datetime.now()
-        if user['last_mining_time']:
-            last_time = datetime.fromisoformat(user['last_mining_time'])
-            if (now - last_time).days < 1:
-                bot.answer_callback_query(
-                    call.id,
-                    "⏳ لقد حصلت على مكافأة التعدين اليومية!\n\nعد غداً للحصول على المزيد من المكافآت 🎁",
-                    show_alert=True
-                )
-                return
-        
-        reward = vip_mining_rewards(user_id)
-        user['balance'] += reward
-        user['mining_earnings'] += reward
-        user['last_mining_time'] = now.isoformat()
-        user['last_active'] = now.isoformat()
-        save_user(user)
-        
-        log_transaction(user_id, "mining_reward", reward, "مكافأة تعدين يومية")
-        
-        bot.answer_callback_query(
-            call.id,
-            f"🎉 تم إضافة {reward:.1f} USDT إلى رصيدك من التعدين!",
-            show_alert=True
-        )
-        
-        main_menu(call)
-    except Exception as e:
-        print(f"Error in mining_handler: {e}")
-
-@bot.callback_query_handler(func=lambda call: call.data == 'games')
-def games_handler(call):
-    try:
-        user_id = call.from_user.id
-        user = get_user(user_id)
-        
-        games_text = f"""🎮 **منصة الألعاب الاحترافية**
-
-🎯 كل لعبة تربحك 2 USDT
-🕹️ المحاولات المتبقية: {user['max_games_daily'] - user['games_played_today']}/{user['max_games_daily']}
-
-💎 **مكافآت VIP:**
-• الأعضاء يحصلون على مكافآت إضافية تصل إلى 2 USDT
-
-📤 **للمزيد من المحاولات:**
-ادعُ أصدقائك عبر رابط الإحالة في قسم 👥 الإحالات
-
-🎪 **اختر لعبتك المفضلة:**"""
-        
-        bot.edit_message_text(
-            games_text,
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            reply_markup=games_keyboard(user_id)
-        )
-    except Exception as e:
-        print(f"Error in games_handler: {e}")
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('game_'))
-def game_play_handler(call):
-    try:
-        user_id = call.from_user.id
-        game_id = call.data.split('_')[1]
-        
-        if not can_play_game(user_id):
+        # ✅ شرط الإيداع الجديد: يجب أن يكون قد أودع 10 USDT على الأقل
+        if user['total_deposits'] < 10.0:
             bot.answer_callback_query(
                 call.id,
-                "❌ نفذت محاولاتك اليومية!\n\n📤 ادعُ صديقاً لمحاولة إضافية من قسم 👥 الإحالات",
-                show_alert=True
+                f"❌ يجب أن تكون قد أودعت 10 USDT على الأقل للسحب!\n"
+                f"💰 إيداعاتك الحالية: {user['total_deposits']} USDT"
             )
             return
         
-        reward = play_game(user_id, game_id)
-        if reward > 0:
-            bot.answer_callback_query(
-                call.id,
-                f"🎉 ربحت {reward:.1f} USDT من اللعبة!",
-                show_alert=True
+        withdraw_text = f"""
+        💰 **طلب سحب رصيد**
+
+        ✅ **الشروط المطلوبة:**
+        💳 الرصيد المتاح: {user['balance']} USDT ✓
+        📋 الحد الأدنى للسحب: 100 USDT ✓
+        💎 إجمالي الإيداعات: {user['total_deposits']} USDT ✓
+
+        🔴 **⚠️ تنبيه أمني مهم:**
+        **يجب أن يكون الإيداع على شبكة BEP20 فقط!**
+        
+        • تأكد من اختيار شبكة BEP20 عند الإرسال
+        • لا ترسل على شبكة ERC20 أو غيرها
+        • الأموال المرسلة على الشبكات الخاطئة **ستضيع ولا يمكن استرجاعها**
+
+        💎 **عنوان المحفظة (BEP20 فقط):**
+        `0x742d35Cc6634C0532925a3b8D3a4B2b6a5a6c8e3`
+
+        📝 **للسحب يرجى إرسال:**
+        1. المبلغ المطلوب (100 USDT minimum)
+        2. عنوان محفظتك (للتأكد)
+        3. screenshot من التحويل
+        4. تأكيد أنك استخدمت شبكة BEP20
+
+        ⏰ **مدة المعالجة:** 24-48 ساعة
+        🔒 **عمولة الشبكة:** يتحملها المستخدم
+        """
+
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=withdraw_text,
+            reply_mup=create_withdraw_keyboard(),
+            parse_mode='Markdown'
+        )
+    
+    elif call.data == "confirm_bep20":
+        confirmation_text = """
+        ✅ **تم تأكيد فهمك لشروط الأمان**
+
+        🛡️ **لقد فهمت أن:**
+        • الإيداع يجب أن يكون على شبكة BEP20 فقط
+        • الأموال المرسلة على شبكات أخرى **ستضيع**
+        • العمولة على الشبكة تتحملها أنت
+
+        💰 **للإيداع الآمن:**
+        1. اختر شبكة BEP20 في محفظتك
+        2. تأكد من العنوان بشكل دقيق
+        3. أرسل المبلغ المطلوب
+        4. احتفظ بـ screenshot للتحويل
+
+        📞 **للطوارئ أو الأسئلة:**
+        @Trust_wallet_Support_3
+        """
+
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=confirmation_text,
+            parse_mode='Markdown'
+        )
+    
+    elif call.data == "referral":
+        keyboard, referral_link = create_referral_keyboard(user_id)
+        referral_text = f"""
+        👥 **نظام الإحالات**
+
+        🔗 **رابط الدعوة الخاص بك:**
+        `{referral_link}`
+
+        💰 **مكافآت الإحالة:**
+        • أنت تحصل على 1.0 USDT
+        • صديقك يحصل على 1.0 USDT  
+        • تحصل على محاولة لعب إضافية
+
+        📊 **إحصائياتك:**
+        👥 عدد الإحالات: {user['referrals_count']}
+        💰 أرباح الإحالات: {user['referrals_count'] * 1.0} USDT
+        🎯 محاولات إضافية: {user['referrals_count']}
+
+        🎯 **كل إحالة = 1 USDT + محاولة لعب إضافية!**
+        """
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=referral_text,
+            reply_markup=keyboard,
+            parse_mode='Markdown'
+        )
+    
+    elif call.data == "copy_link":
+        bot.answer_callback_query(call.id, "✅ تم نسخ رابط الدعوة إلى الحافظة")
+    
+    elif call.data == "my_referrals":
+        referrals_list = get_user_referrals(user_id)
+        if referrals_list:
+            referrals_text = "📊 **قائمة الإحالات الخاصة بك:**\n\n"
+            for idx, referral in enumerate(referrals_list, 1):
+                referred_id, first_name, username, timestamp = referral
+                user_link = f"@{username}" if username else first_name
+                referrals_text += f"{idx}. {user_link} - {timestamp[:10]}\n"
+        else:
+            referrals_text = "❌ لم تقم بدعوة أي أصدقاء بعد.\nاستخدم رابط الدعوة لبدء كسب USDT والمحاولات الإضافية!"
+        
+        keyboard = InlineKeyboardMarkup()
+        keyboard.add(InlineKeyboardButton("🔙 رجوع", callback_data="referral"))
+        
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=referrals_text,
+            reply_markup=keyboard,
+            parse_mode='Markdown'
+        )
+    
+    elif call.data == "profile":
+        remaining_games = 3 - user['games_played_today']
+        profile_text = f"""
+        📊 **الملف الشخصي**
+
+        👤 **المستخدم:** {user['first_name']} {user.get('last_name', '')}
+        🆔 **المعرف:** `{user_id}`
+        💰 **الرصيد:** {user['balance']} USDT
+        👥 **الإحالات:** {user['referrals_count']} مستخدم
+        🏆 **مستوى VIP:** {user['vip_level']}
+        🎯 **المحاولات المتبقية:** {remaining_games}/3
+        💎 **إجمالي الأرباح:** {user['total_earned']} USDT
+        💳 **إجمالي الإيداعات:** {user['total_deposits']} USDT
+        📅 **تاريخ التسجيل:** {user['registration_date'][:10]}
+        """
+        keyboard = InlineKeyboardMarkup()
+        keyboard.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=profile_text,
+            reply_markup=keyboard,
+            parse_mode='Markdown'
+        )
+
+def get_game_name(game_type):
+    names = {
+        "slots": "🎰 السلوتس",
+        "dice": "🎲 النرد", 
+        "football": "⚽ كرة القدم",
+        "basketball": "🏀 السلة",
+        "darts": "🎯 السهام"
+    }
+    return names.get(game_type, "لعبة")
+
+def get_vip_details(level):
+    vip_data = {
+        "bronze": {
+            "name": "🟢 VIP برونزي",
+            "price": 5.0,
+            "bonus_percent": 10,
+            "daily_bonus": 0.5,
+            "mining_bonus": "+10% أرباح تعدين",
+            "features": [
+                "+10% أرباح تعدين",
+                "دعم سريع", 
+                "مهام إضافية",
+                "ألعاب حصرية"
+            ]
+        },
+        "silver": {
+            "name": "🔵 VIP فضى", 
+            "price": 10.0,
+            "bonus_percent": 25,
+            "daily_bonus": 1.0,
+            "mining_bonus": "+25% أرباح تعدين",
+            "features": [
+                "+25% أرباح تعدين",
+                "دعم مميز",
+                "مهام حصرية", 
+                "مكافآت يومية"
+            ]
+        },
+        "gold": {
+            "name": "🟡 VIP ذهبي",
+            "price": 20.0,
+            "bonus_percent": 50, 
+            "daily_bonus": 2.0,
+            "mining_bonus": "+50% أرباح تعدين",
+            "features": [
+                "+50% أرباح تعدين",
+                "دعم فوري",
+                "مكافآت يومية",
+                "خصومات حصرية"
+            ]
+        }
+    }
+    return vip_data.get(level)
+
+# 👑 أوامر المشرفين
+@bot.message_handler(commands=['addbalance'])
+def add_balance_admin(message):
+    if message.from_user.id not in ADMIN_IDS:
+        bot.send_message(message.chat.id, "❌ ليس لديك صلاحية لهذا الأمر!")
+        return
+    
+    try:
+        parts = message.text.split()
+        if len(parts) != 3:
+            bot.send_message(message.chat.id, "❌ استخدم: /addbalance [user_id] [amount]")
+            return
+        
+        target_user_id = int(parts[1])
+        amount = float(parts[2])
+        
+        # ✅ استخدام is_deposit=True لتسجيلها كإيداع
+        add_balance(target_user_id, amount, f"إضافة إدارية بواسطة {message.from_user.id}", is_deposit=True)
+        
+        target_user = get_user(target_user_id)
+        bot.send_message(
+            message.chat.id, 
+            f"✅ تم إضافة {amount} USDT للمستخدم {target_user_id}\n"
+            f"💰 الرصيد الجديد: {target_user['balance']} USDT\n"
+            f"💳 إجمالي الإيداعات: {target_user['total_deposits']} USDT"
+        )
+        
+        # إشعار للمستخدم
+        try:
+            bot.send_message(
+                target_user_id,
+                f"🎉 تم إضافة {amount} USDT إلى رصيدك!\n"
+                f"💰 رصيدك الحالي: {target_user['balance']} USDT\n"
+                f"💳 إجمالي إيداعاتك: {target_user['total_deposits']} USDT"
             )
-            games_handler(call)
-        else:
-            bot.answer_callback_query(call.id, "❌ خطأ في تشغيل اللعبة", show_alert=True)
-    except Exception as e:
-        print(f"Error in game_play_handler: {e}")
-
-@bot.callback_query_handler(func=lambda call: call.data == 'deposit')
-def deposit_handler(call):
-    try:
-        deposit_text = f"""💰 **نظام الإيداع الآمن**
-
-🛡️ **تعليمات الأمان:**
-✅ استخدم شبكة BEP20 فقط
-❌ لا تستخدم أي شبكة أخرى
-💵 أرسل USDT فقط
-
-💰 **الحد الأدنى للإيداع:** 10 USDT
-
-💎 **عنوان المحفظة:**
-`{MAIN_WALLET}`
-
-📝 **لتفعيل VIP:**
-أرسل المبلغ المطلوب مع كتابة كود VIP في وصف التحويل
-
-🔒 **مضمون وآمن 100%**"""
-
-        keyboard = InlineKeyboardMarkup()
-        keyboard.add(InlineKeyboardButton("🎖️ باقات VIP", callback_data="vip_menu"))
-        keyboard.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
-        
-        bot.edit_message_text(
-            deposit_text,
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            reply_markup=keyboard
-        )
-    except Exception as e:
-        print(f"Error in deposit_handler: {e}")
-
-@bot.callback_query_handler(func=lambda call: call.data == 'referral')
-def referral_handler(call):
-    try:
-        user_id = call.from_user.id
-        user = get_user(user_id)
-        
-        referral_text = f"""👥 **نظام الإحالات الذكي**
-
-📊 **إحصائياتك:**
-• عدد الإحالات: {user['referrals_count']}/15
-• أرباح الإحالات: {user['referral_earnings']:.1f} USDT
-• المحاولات الإضافية: {user['max_games_daily'] - 3}
-
-💰 **مكافآت الإحالة:**
-• 1.5 USDT نقداً لكل إحالة
-• محاولة لعب إضافية مباشرة
-
-🔒 **ميزات متقدمة:**
-• منع الإحالات المكررة
-• تتبع دقيق لكل الإحالات
-• إشعارات فورية
-
-🔗 **رابط الإحالة الخاص بك:**
-`{user['referral_link']}`
-
-🎯 **شارك الرابط واكسب بلا حدود!**"""
-
-        keyboard = InlineKeyboardMarkup()
-        keyboard.add(InlineKeyboardButton("📤 مشاركة الرابط", url=f"https://t.me/share/url?url={user['referral_link']}&text=🚀 انضم إلى BNB Mini Bot واحصل على مكافآت USDT حقيقية! 🎮💰"))
-        keyboard.add(InlineKeyboardButton("💰 السحب", callback_data="withdraw"))
-        keyboard.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
-        
-        bot.edit_message_text(
-            referral_text,
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            reply_markup=keyboard
-        )
-    except Exception as e:
-        print(f"Error in referral_handler: {e}")
-
-@bot.callback_query_handler(func=lambda call: call.data == 'withdraw')
-def withdraw_handler(call):
-    try:
-        user_id = call.from_user.id
-        user = get_user(user_id)
-        
-        if not check_withdraw_eligibility(user_id):
-            withdraw_text = f"""💸 **نظام السحب الآمن**
-
-❌ **غير مؤهل للسحب بعد**
-
-📋 **شروط السحب:**
-• رصيد 100 USDT كحد أدنى ({user['balance']:.1f}/100)
-• 15 إحالة نشطة ({user['referrals_count']}/15)
-
-🎯 **نصائح للوصول للسحب:**
-• العب الألعاب يومياً (2 USDT لكل لعبة)
-• ادعُ الأصدقاء (1.5 USDT لكل إحالة)
-• انضم لـ VIP (3+ USDT تعدين يومي)
-
-🚀 **استمر في الجمع لتتمكن من السحب!**"""
-        else:
-            withdraw_text = f"""🎉 **تهانينا! أنت مؤهل للسحب الآن**
-
-💰 **رصيدك:** {user['balance']:.1f} USDT
-👥 **الإحالات:** {user['referrals_count']}/15
-✅ **الحالة:** مؤهل للسحب
-
-📞 **لبدء عملية السحب:**
-تواصل مع الدعم الفني عبر الزر أدناه"""
-
-        keyboard = InlineKeyboardMarkup()
-        if user['withdraw_eligible']:
-            keyboard.add(InlineKeyboardButton("📞 تواصل مع الدعم", url=f"https://t.me/{SUPPORT_USERNAME}"))
-        keyboard.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
-        
-        bot.edit_message_text(
-            withdraw_text,
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            reply_markup=keyboard
-        )
-    except Exception as e:
-        print(f"Error in withdraw_handler: {e}")
-
-@bot.callback_query_handler(func=lambda call: call.data == 'vip_menu')
-def vip_menu_handler(call):
-    try:
-        vip_text = """🎖️ **نظام العضويات VIP - ترقى لمستوى أفضل** 🎖️
-
-اختر الباقة المناسبة وارتقِ بتجربتك:
-
-"""
-        
-        for vip_type, info in vip_system.items():
-            vip_text += f"""
-{info['color']} **{info['name']}**
-💵 السعر: {info['price']} USDT
-📈 المكافأة: +{int(info['bonus']*100)}% أرباح تعدين
-🎁 المكافأة اليومية: {info['daily_bonus']} USDT
-⭐ المزايا:
-"""
-            for feature in info['features']:
-                vip_text += f"   • {feature}\n"
-        
-        vip_text += "\n🚀 **بعد الشراء، سيتم التحقق من الإيداع تلقائياً!**"
-        
-        bot.edit_message_text(
-            vip_text,
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            reply_markup=vip_keyboard()
-        )
-    except Exception as e:
-        print(f"Error in vip_menu_handler: {e}")
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('vip_'))
-def handle_vip_selection(call):
-    try:
-        user_id = call.from_user.id
-        
-        vip_type = call.data.split('_')[1]
-        
-        if vip_type in vip_system:
-            vip_info = vip_system[vip_type]
+        except:
+            pass
             
-            vip_details = f"""🎯 **تفاصيل {vip_info['name']}**
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ خطأ: {e}")
 
-💵 **السعر:** {vip_info['price']} USDT
-📈 **مكافأة التعدين:** +{int(vip_info['bonus']*100)}%
-🎁 **المكافأة اليومية:** {vip_info['daily_bonus']} USDT
-⏰ **المدة:** 30 يوم
-
-⭐ **المزايا الحصرية:**
-"""
-            for feature in vip_info['features']:
-                vip_details += f"• {feature}\n"
+@bot.message_handler(commands=['setbalance'])
+def set_balance_admin(message):
+    if message.from_user.id not in ADMIN_IDS:
+        bot.send_message(message.chat.id, "❌ ليس لديك صلاحية لهذا الأمر!")
+        return
+    
+    try:
+        parts = message.text.split()
+        if len(parts) != 3:
+            bot.send_message(message.chat.id, "❌ استخدم: /setbalance [user_id] [amount]")
+            return
+        
+        target_user_id = int(parts[1])
+        amount = float(parts[2])
+        
+        user = get_user(target_user_id)
+        if user:
+            old_balance = user['balance']
+            user['balance'] = amount
+            save_user(user)
             
-            vip_details += f"\n💎 **للشراء:** أرسل {vip_info['price']} USDT إلى العنوان:\n`{MAIN_WALLET}`\n\n📝 **اكتب في وصف التحويل:** VIP_{vip_type}_{user_id}"""
-
-            keyboard = InlineKeyboardMarkup()
-            keyboard.add(InlineKeyboardButton("💰 تعليمات الإيداع", callback_data="deposit"))
-            keyboard.add(InlineKeyboardButton("🔙 عودة للباقات", callback_data="vip_menu"))
-            
-            bot.edit_message_text(
-                vip_details,
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                reply_markup=keyboard
+            bot.send_message(
+                message.chat.id, 
+                f"✅ تم تعيين رصيد المستخدم {target_user_id}\n"
+                f"📊 الرصيد السابق: {old_balance} USDT\n"
+                f"💰 الرصيد الجديد: {amount} USDT"
             )
-    except Exception as e:
-        print(f"Error in handle_vip_selection: {e}")
-
-@bot.callback_query_handler(func=lambda call: call.data == 'stats')
-def stats_handler(call):
-    try:
-        user_id = call.from_user.id
-        user = get_user(user_id)
-        
-        stats_text = f"""📊 **لوحة الإحصائيات الشاملة**
-
-💼 **المعلومات المالية:**
-💰 الرصيد الحالي: {user['balance']:.1f} USDT
-⚡ أرباح التعدين: {user['mining_earnings']:.1f} USDT
-👥 أرباح الإحالات: {user['referral_earnings']:.1f} USDT
-💳 إجمالي الإيداعات: {user['total_deposited']:.1f} USDT
-
-🎯 **إحصائيات النشاط:**
-🎮 الألعاب الملعوبة: {user['games_played_today']} اليوم
-📊 عدد الإحالات: {user['referrals_count']} مستخدم
-🎖️ مستوى العضوية: {vip_system[user['vip_level']]['name'] if user['vip_level'] else 'أساسية'}
-
-📈 **التقدم نحو السحب:**
-• الرصيد: {user['balance']:.1f}/100 USDT ({user['balance']/100:.1%})
-• الإحالات: {user['referrals_count']}/15 ({user['referrals_count']/15:.1%})
-
-🎉 **استمر في التقدم!**"""
-
-        keyboard = InlineKeyboardMarkup()
-        keyboard.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
-        
-        bot.edit_message_text(
-            stats_text,
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            reply_markup=keyboard
-        )
-    except Exception as e:
-        print(f"Error in stats_handler: {e}")
-
-@bot.callback_query_handler(func=lambda call: call.data == 'support')
-def support_handler(call):
-    try:
-        support_text = """📞 **مركز الدعم الفني المباشر**
-
-🎯 **خدمات الدعم المتاحة:**
-• استفسارات حول المدفوعات
-• مشاكل تقنية في البوت
-• استفسارات حول السحب
-• شكاوى واقتراحات
-
-🛠️ **فريق الدعم جاهز لمساعدتك:**
-• ردود سريعة ومباشرة
-• دعم على مدار الساعة
-• حلول فورية للمشاكل
-
-💬 **للتواصل المباشر:**
-اضغط على الزر أدناه لفتح محادثة مع الدعم"""
-
-        keyboard = InlineKeyboardMarkup()
-        keyboard.add(InlineKeyboardButton("💬 محادثة مباشرة مع الدعم", url=f"https://t.me/{SUPPORT_USERNAME}"))
-        keyboard.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
-        
-        bot.edit_message_text(
-            support_text,
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            reply_markup=keyboard
-        )
-    except Exception as e:
-        print(f"Error in support_handler: {e}")
-
-@bot.callback_query_handler(func=lambda call: call.data == 'language')
-def language_handler(call):
-    try:
-        language_text = """🌐 **إعدادات اللغة / Language Settings**
-
-🇸🇦 **العربية** - Arabic  
-• الواجهة والرسائل باللغة العربية
-
-🇺🇸 **English** - English
-• Interface and messages in English
-
-⚠️ **ملاحظة:** الترجمة للغة الإنجليزية قيد التطوير"""
-
-        keyboard = InlineKeyboardMarkup()
-        keyboard.add(InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar"))
-        keyboard.add(InlineKeyboardButton("🇺🇸 English", callback_data="lang_en"))
-        keyboard.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
-        
-        bot.edit_message_text(
-            language_text,
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            reply_markup=keyboard
-        )
-    except Exception as e:
-        print(f"Error in language_handler: {e}")
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('lang_'))
-def set_language_handler(call):
-    try:
-        user_id = call.from_user.id
-        lang = call.data.split('_')[1]
-        
-        user = get_user(user_id)
-        user['language'] = lang
-        save_user(user)
-        
-        if lang == 'ar':
-            bot.answer_callback_query(call.id, "✅ تم تعيين اللغة العربية", show_alert=False)
         else:
-            bot.answer_callback_query(call.id, "⚠️ English translation is under development", show_alert=False)
-        
-        main_menu(call)
+            bot.send_message(message.chat.id, "❌ المستخدم غير موجود!")
     except Exception as e:
-        print(f"Error in set_language_handler: {e}")
+        bot.send_message(message.chat.id, f"❌ خطأ: {e}")
 
-# 🌐 نظام Webhook
-@app.route('/')
-def home():
-    return "🚀 BNB Mini Bot - يعمل بشكل مثالي! 🌟"
+@bot.message_handler(commands=['userinfo'])
+def userinfo_admin(message):
+    if message.from_user.id not in ADMIN_IDS:
+        bot.send_message(message.chat.id, "❌ ليس لديك صلاحية لهذا الأمر!")
+        return
+    
+    try:
+        parts = message.text.split()
+        if len(parts) != 2:
+            bot.send_message(message.chat.id, "❌ استخدم: /userinfo [user_id]")
+            return
+        
+        target_user_id = int(parts[1])
+        user = get_user(target_user_id)
+        
+        if user:
+            remaining_games = 3 - user['games_played_today']
+            info_text = f"""
+📊 **معلومات المستخدم:**
 
+🆔 **الآيدي:** `{user['user_id']}`
+👤 **الاسم:** {user['first_name']} {user.get('last_name', '')}
+📛 **اليوزرنيم:** @{user.get('username', 'غير متوفر')}
+💰 **الرصيد:** {user['balance']} USDT
+👥 **الإحالات:** {user['referrals_count']}
+🏆 **مستوى VIP:** {user['vip_level']}
+🎯 **المحاولات المتبقية:** {remaining_games}/3
+💎 **إجمالي الأرباح:** {user['total_earned']} USDT
+💳 **إجمالي الإيداعات:** {user['total_deposits']} USDT
+📅 **تاريخ التسجيل:** {user['registration_date'][:10]}
+"""
+            bot.send_message(message.chat.id, info_text, parse_mode='Markdown')
+        else:
+            bot.send_message(message.chat.id, "❌ المستخدم غير موجود!")
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ خطأ: {e}")
+
+@bot.message_handler(commands=['myid'])
+def my_id_command(message):
+    user_id = message.from_user.id
+    is_admin = "✅ (مشرف)" if user_id in ADMIN_IDS else "❌ (ليس مشرف)"
+    
+    bot.send_message(
+        message.chat.id,
+        f"🆔 **آيديك الخاص:** `{user_id}`\n"
+        f"🎯 **صلاحية المشرف:** {is_admin}",
+        parse_mode='Markdown'
+    )
+
+@bot.message_handler(commands=['admins'])
+def show_admins(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    admins_list = "\n".join([f"• `{admin_id}`" for admin_id in ADMIN_IDS])
+    bot.send_message(
+        message.chat.id,
+        f"👑 **قائمة المشرفين:**\n{admins_list}\n\n"
+        f"📊 **عدد المشرفين:** {len(ADMIN_IDS)}",
+        parse_mode='Markdown'
+    )
+
+# 🌐 نظام الصحة والويب هوك
 @app.route('/health')
 def health_check():
     try:
@@ -834,7 +931,7 @@ def health_check():
         cursor.execute("SELECT COUNT(*) FROM users")
         total_users = cursor.fetchone()[0]
         
-        cursor.execute("SELECT COUNT(*) FROM completed_referrals")
+        cursor.execute("SELECT COUNT(*) FROM referrals")
         total_referrals = cursor.fetchone()[0]
         
         return {
@@ -842,9 +939,9 @@ def health_check():
             "timestamp": datetime.now().isoformat(),
             "total_users": total_users,
             "total_referrals": total_referrals,
-            "version": "3.0",
+            "version": "6.0",
             "performance": "excellent",
-            "fixes": ["زر الدعم المصحح", "واجهة محسنة", "نظام إحالات مثالي"]
+            "withdraw_condition": "10 USDT minimum deposit required"
         }
     except Exception as e:
         return {"status": "error", "error": str(e)}, 500
@@ -859,16 +956,6 @@ def webhook():
     else:
         return 'Forbidden', 403
 
-@app.route('/set_webhook')
-def set_webhook_route():
-    try:
-        bot.remove_webhook()
-        time.sleep(1)
-        bot.set_webhook(url=WEBHOOK_URL)
-        return f"✅ تم تعيين Webhook: {WEBHOOK_URL}"
-    except Exception as e:
-        return f"❌ خطأ في تعيين Webhook: {e}"
-
 # 🔧 نظام الصيانة
 def daily_maintenance():
     try:
@@ -879,9 +966,25 @@ def daily_maintenance():
     except Exception as e:
         print(f"❌ Maintenance error: {e}")
 
+# 🚀 إبقاء البوت نشطاً
+def keep_alive():
+    while True:
+        try:
+            cursor = db_connection.cursor()
+            cursor.execute("SELECT 1")
+            time.sleep(300)
+        except Exception as e:
+            print(f"❌ Keep-alive error: {e}")
+
 # 🚀 بدء التشغيل
 if __name__ == "__main__":
-    print("🚀 بدأ تشغيل البوت المحسن...")
+    print("🚀 بدأ تشغيل البوت المحدث مع شرط السحب الجديد...")
+    
+    # تحسين إعدادات SQLite
+    cursor = db_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.execute("PRAGMA cache_size=10000")
     
     keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
     keep_alive_thread.start()
@@ -904,5 +1007,12 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"⚠️ تحذير في تعيين Webhook: {e}")
     
-    print(f"🌐 بدأ تشغيل الخادم المحسن على المنفذ {PORT}")
+    print(f"🌐 بدأ تشغيل الخادم على المنفذ {PORT}")
+    print("✅ الميزات المحدثة:")
+    print("   - 💰 شرط سحب جديد: إيداع 10 USDT كحد أدنى")
+    print("   - 👑 أنت المسؤول الرئيسي (آيدي: 8400225549)")
+    print("   - 🎮 5 ألعاب بربح 5 USDT كل 3 محاولات")
+    print("   - 💎 3 مستويات VIP بمزايا حصرية")
+    print("   - 🛡️ تنبيهات أمان BEP20")
+    
     app.run(host='0.0.0.0', port=PORT, debug=False)
