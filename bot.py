@@ -2,60 +2,125 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import random
 from datetime import datetime
-import json
-import os
+import time
+import threading
 
 BOT_TOKEN = "8385331860:AAFTz51bMqPjtEBM50p_5WY_pbMytnqS0zc"
+SUPPORT_USER_ID = "8400225549"  # 🔥 ضع هنا ID حسابك الشخصي
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # تخزين البيانات
 user_data = {}
+user_language = {}
+support_messages = {}
 
-def main_menu_keyboard():
+# نصوص متعددة اللغات
+texts = {
+    'ar': {
+        'welcome': "🎉 أهلاً بك في محفظة تعدين USDT!",
+        'balance': "💰 الرصيد",
+        'mining': "⛏️ التعدين", 
+        'referrals': "👥 الإحالات",
+        'games': "🎮 الألعاب",
+        'tasks': "📋 المهام",
+        'wallet': "💳 المحفظة",
+        'support': "📞 الدعم",
+        'back': "🔙 الرئيسية",
+        'your_balance': "💰 رصيدك: {:.2f} USDT",
+        'mining_status': "⛏️ التعدين: {:.2f}/2.00 USDT\n📊 التقدم: {:.1f}%",
+        'referrals_count': "👥 الإحالات: {}",
+        'choose_language': "🌍 اختر اللغة",
+        'mining_progress': "🔄 جاري التعدين تلقائياً...",
+        'support_title': "📞 الدعم الفني",
+        'support_desc': "💬 اكتب رسالتك وسيتم إرسالها مباشرة إلى فريق الدعم\n\n⏰ وقت الاستجابة: 24 ساعة",
+        'support_success': "✅ تم إرسال رسالتك إلى الدعم!\n\nسيتم الرد عليك قريباً.",
+        'support_prompt': "✍️ اكتب رسالتك الآن:",
+        'support_error': "⚠️ الرسالة قصيرة جداً. يرجى كتابة تفاصيل أكثر."
+    },
+    'en': {
+        'welcome': "🎉 Welcome to USDT Mining Wallet!",
+        'balance': "💰 Balance",
+        'mining': "⛏️ Mining",
+        'referrals': "👥 Referrals",
+        'games': "🎮 Games",
+        'tasks': "📋 Tasks",
+        'wallet': "💳 Wallet",
+        'support': "📞 Support",
+        'back': "🔙 Main",
+        'your_balance': "💰 Your balance: {:.2f} USDT",
+        'mining_status': "⛏️ Mining: {:.2f}/2.00 USDT\n📊 Progress: {:.1f}%",
+        'referrals_count': "👥 Referrals: {}",
+        'choose_language': "🌍 Choose language",
+        'mining_progress': "🔄 Auto mining in progress...",
+        'support_title': "📞 Technical Support",
+        'support_desc': "💬 Write your message and it will be sent directly to the support team\n\n⏰ Response time: 24 hours",
+        'support_success': "✅ Your message has been sent to support!\n\nYou will be replied to soon.",
+        'support_prompt': "✍️ Write your message now:",
+        'support_error': "⚠️ Message is too short. Please write more details."
+    }
+}
+
+def get_text(user_id, key, **kwargs):
+    lang = user_language.get(str(user_id), 'ar')
+    text = texts[lang].get(key, key)
+    return text.format(**kwargs) if kwargs else text
+
+def send_support_notification(user_id, message_text, username, first_name):
+    """إرسال إشعار الدعم إلى حسابك الشخصي"""
+    try:
+        notification = f"""
+📩 **رسالة دعم جديدة**
+
+👤 **المستخدم:** {first_name} (@{username})
+🆔 **ID:** `{user_id}`
+📅 **الوقت:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+💬 **الرسالة:**
+{message_text}
+        """.strip()
+        
+        # إرسال الرسالة إلى حسابك الشخصي
+        bot.send_message(SUPPORT_USER_ID, notification, parse_mode='Markdown')
+        return True
+    except Exception as e:
+        print(f"❌ خطأ في إرسال إشعار الدعم: {e}")
+        return False
+
+def language_keyboard():
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
-        InlineKeyboardButton("💰 الرصيد", callback_data="balance"),
-        InlineKeyboardButton("⛏️ التعدين", callback_data="mining")
+        InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar"),
+        InlineKeyboardButton("🇺🇸 English", callback_data="lang_en")
     )
-    keyboard.add(
-        InlineKeyboardButton("👥 الإحالات", callback_data="referrals"),
-        InlineKeyboardButton("🎮 الألعاب", callback_data="games")
-    )
-    keyboard.add(
-        InlineKeyboardButton("📋 المهام", callback_data="tasks"),
-        InlineKeyboardButton("💳 المحفظة", callback_data="wallet")
-    )
-    keyboard.add(InlineKeyboardButton("📞 الدعم", callback_data="support"))
     return keyboard
 
-def referrals_keyboard():
+def main_menu_keyboard(user_id):
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
-        InlineKeyboardButton("📋 نسخ رابط الدعوة", callback_data="copy_referral"),
-        InlineKeyboardButton("👥 إحالاتي", callback_data="my_referrals")
+        InlineKeyboardButton(get_text(user_id, 'balance'), callback_data="balance"),
+        InlineKeyboardButton(get_text(user_id, 'mining'), callback_data="mining")
     )
-    keyboard.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
-    return keyboard
-
-def wallet_keyboard():
-    keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
-        InlineKeyboardButton("💳 الإيداع", callback_data="deposit"),
-        InlineKeyboardButton("🔄 السحب", callback_data="withdraw")
+        InlineKeyboardButton(get_text(user_id, 'referrals'), callback_data="referrals"),
+        InlineKeyboardButton(get_text(user_id, 'games'), callback_data="games")
     )
-    keyboard.add(InlineKeyboardButton("📋 نسخ العنوان", callback_data="copy_deposit"))
-    keyboard.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
+    keyboard.add(
+        InlineKeyboardButton(get_text(user_id, 'tasks'), callback_data="tasks"),
+        InlineKeyboardButton(get_text(user_id, 'wallet'), callback_data="wallet")
+    )
+    keyboard.add(InlineKeyboardButton(get_text(user_id, 'support'), callback_data="support"))
+    keyboard.add(InlineKeyboardButton("🌍 تغيير اللغة", callback_data="change_language"))
     return keyboard
 
-def games_keyboard():
+def back_keyboard(user_id):
     keyboard = InlineKeyboardMarkup()
-    keyboard.add(InlineKeyboardButton("🎰 لعب السلوت", callback_data="slot_game"))
-    keyboard.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
+    keyboard.add(InlineKeyboardButton(get_text(user_id, 'back'), callback_data="main_menu"))
     return keyboard
 
-def back_to_main_keyboard():
+def support_keyboard(user_id):
     keyboard = InlineKeyboardMarkup()
-    keyboard.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
+    keyboard.add(InlineKeyboardButton("📩 إرسال رسالة", callback_data="send_support_message"))
+    keyboard.add(InlineKeyboardButton(get_text(user_id, 'back'), callback_data="main_menu"))
     return keyboard
 
 def init_user(user_id):
@@ -64,154 +129,161 @@ def init_user(user_id):
             'wallet_balance': 0.0,
             'mining_earnings': 0.0,
             'referrals_count': 0,
-            'completed_tasks': 0,
             'mining_progress': 0.0,
             'max_mining': 2.0,
             'attempts_left': 10,
-            'consecutive_days': 1,
-            'last_login': datetime.now().date().isoformat(),
-            'total_games_played': 0,
+            'user_id': str(user_id),
             'referral_earnings': 0.0,
-            'today_referrals': 0,
-            'user_id': str(user_id),  # استخدام الـ ID كرمز للإحالة
-            'total_deposited': 0.0,
-            'referred_by': None,
-            'referral_list': []  # قائمة بمن دعاهم
+            'last_update': datetime.now()
         }
 
-def get_referral_link(user_id):
-    return f"https://t.me/BNBMini1Bot?start={user_id}"
+def auto_mining():
+    """التعدين التلقائي في الخلفية"""
+    while True:
+        try:
+            current_time = datetime.now()
+            for user_id, data in user_data.items():
+                # تحديث التعدين كل دقيقة
+                time_diff = (current_time - data['last_update']).total_seconds()
+                if time_diff >= 60:  # كل دقيقة
+                    if data['mining_progress'] < data['max_mining']:
+                        data['mining_progress'] += 0.01
+                        if data['mining_progress'] > data['max_mining']:
+                            data['mining_progress'] = data['max_mining']
+                        data['last_update'] = current_time
+            
+            time.sleep(60)  # انتظر دقيقة بين كل تحديث
+        except Exception as e:
+            print(f"⚠️ خطأ في التعدين التلقائي: {e}")
+            time.sleep(30)
 
-def update_referrer_stats(referrer_id):
-    if str(referrer_id) in user_data:
-        user_data[str(referrer_id)]['referrals_count'] += 1
-        user_data[str(referrer_id)]['today_referrals'] += 1
-        user_data[str(referrer_id)]['referral_earnings'] += 1.0
-        user_data[str(referrer_id)]['referral_list'].append(datetime.now().isoformat())
+# بدء التعدين التلقائي في thread منفصل
+mining_thread = threading.Thread(target=auto_mining, daemon=True)
+mining_thread.start()
 
-@bot.message_handler(commands=['start'])
+@bot.message_handler(commands=['start', 'test', 'language'])
 def start_cmd(message):
-    user_id = message.from_user.id
-    init_user(user_id)
-    
-    # معالجة الإحالة
-    if len(message.text.split()) > 1:
-        referrer_id = message.text.split()[1]
-        if referrer_id.isdigit() and referrer_id != str(user_id):
-            user_data[str(user_id)]['referred_by'] = referrer_id
-            update_referrer_stats(referrer_id)
-    
-    welcome = f"""🎉 **أهلاً بك في محفظة تعدين USDT!**
+    try:
+        user_id = message.from_user.id
+        
+        if str(user_id) not in user_language:
+            # إذا لم يختر لغة بعد
+            bot.send_message(
+                user_id, 
+                get_text(user_id, 'choose_language'),
+                reply_markup=language_keyboard()
+            )
+            return
+        
+        init_user(user_id)
+        
+        # معالجة الإحالة
+        if len(message.text.split()) > 1:
+            referrer_id = message.text.split()[1]
+            if referrer_id.isdigit() and referrer_id != str(user_id):
+                user_data[str(user_id)]['referred_by'] = referrer_id
+                if referrer_id in user_data:
+                    user_data[referrer_id]['referrals_count'] += 1
+                    user_data[referrer_id]['referral_earnings'] += 1.0
+        
+        welcome = f"""{get_text(user_id, 'welcome')}
 
-💰 **رصيدك:** {user_data[str(user_id)]['wallet_balance']:.2f} USDT
-⛏️ **جاري التعدين:** {user_data[str(user_id)]['mining_progress']:.2f}/2.00 USDT
-👥 **الإحالات:** {user_data[str(user_id)]['referrals_count']}
+{get_text(user_id, 'your_balance', balance=user_data[str(user_id)]['wallet_balance'])}
+{get_text(user_id, 'mining_status', 
+          progress=user_data[str(user_id)]['mining_progress'],
+          percent=(user_data[str(user_id)]['mining_progress'] / 2.0) * 100)}
+{get_text(user_id, 'referrals_count', count=user_data[str(user_id)]['referrals_count'])}
 
-🚀 **اختر من الأزرار أدناه للبدء:**"""
-    
-    bot.send_message(user_id, welcome, reply_markup=main_menu_keyboard())
+🚀 اختر من الأزرار أدناه:"""
+        
+        bot.send_message(user_id, welcome, reply_markup=main_menu_keyboard(user_id))
+        
+    except Exception as e:
+        print(f"❌ خطأ في /start: {e}")
+        try:
+            bot.send_message(user_id, "⚠️ حدث خطأ، يرجى المحاولة مرة أخرى")
+        except:
+            pass
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
-    user_id = call.from_user.id
-    init_user(user_id)
-    data = user_data[str(user_id)]
-    
     try:
-        if call.data == "main_menu":
-            show_main_menu(call)
+        user_id = call.from_user.id
+        init_user(user_id)
+        data = user_data[str(user_id)]
+        
+        if call.data.startswith('lang_'):
+            # اختيار اللغة
+            lang = call.data.split('_')[1]
+            user_language[str(user_id)] = lang
+            bot.answer_callback_query(call.id, f"✅ تم اختيار اللغة / Language selected")
+            
+            # إرسال القائمة الرئيسية بعد اختيار اللغة
+            welcome = f"""{get_text(user_id, 'welcome')}
+
+{get_text(user_id, 'your_balance', balance=data['wallet_balance'])}
+{get_text(user_id, 'mining_status', 
+          progress=data['mining_progress'],
+          percent=(data['mining_progress'] / 2.0) * 100)}
+{get_text(user_id, 'referrals_count', count=data['referrals_count'])}
+
+🚀 اختر من الأزرار:"""
+            
+            bot.edit_message_text(
+                welcome,
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                reply_markup=main_menu_keyboard(user_id)
+            )
+            return
+        
+        elif call.data == "change_language":
+            bot.edit_message_text(
+                get_text(user_id, 'choose_language'),
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                reply_markup=language_keyboard()
+            )
+            return
+        
+        elif call.data == "main_menu":
+            welcome = f"""{get_text(user_id, 'welcome')}
+
+{get_text(user_id, 'your_balance', balance=data['wallet_balance'])}
+{get_text(user_id, 'mining_status', 
+          progress=data['mining_progress'],
+          percent=(data['mining_progress'] / 2.0) * 100)}
+{get_text(user_id, 'referrals_count', count=data['referrals_count'])}
+
+🚀 اختر من الأزرار:"""
+            
+            bot.edit_message_text(
+                welcome,
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                reply_markup=main_menu_keyboard(user_id)
+            )
         
         elif call.data == "balance":
-            show_balance(call)
-        
-        elif call.data == "mining":
-            show_mining(call)
-        
-        elif call.data == "referrals":
-            show_referrals(call)
-        
-        elif call.data == "games":
-            show_games(call)
-        
-        elif call.data == "tasks":
-            show_tasks(call)
-        
-        elif call.data == "wallet":
-            show_wallet(call)
-        
-        elif call.data == "support":
-            show_support(call)
-        
-        elif call.data == "copy_referral":
-            copy_referral_link(call)
-        
-        elif call.data == "my_referrals":
-            show_my_referrals(call)
-        
-        elif call.data == "deposit":
-            show_deposit(call)
-        
-        elif call.data == "withdraw":
-            show_withdraw(call)
-        
-        elif call.data == "copy_deposit":
-            copy_deposit_address(call)
-        
-        elif call.data == "slot_game":
-            play_slot_game(call)
-            
-    except Exception as e:
-        bot.answer_callback_query(call.id, "⚠️ حدث خطأ، يرجى المحاولة مرة أخرى")
-
-def show_main_menu(call):
-    user_id = call.from_user.id
-    data = user_data[str(user_id)]
-    
-    menu_text = f"""🏠 **القائمة الرئيسية**
-
-💰 الرصيد: {data['wallet_balance']:.2f} USDT
-⛏️ التعدين: {data['mining_progress']:.2f}/2.00 USDT
-👥 الإحالات: {data['referrals_count']}
-
-🎯 اختر الخدمة التي تريدها:"""
-    
-    bot.edit_message_text(
-        menu_text,
-        chat_id=call.message.chat.id,
-        message_id=call.message.message_id,
-        reply_markup=main_menu_keyboard()
-    )
-
-def show_balance(call):
-    user_id = call.from_user.id
-    data = user_data[str(user_id)]
-    total_balance = data['wallet_balance'] + data['mining_earnings'] + data['referral_earnings']
-    
-    balance_text = f"""💰 **رصيدك الشامل**
+            total = data['wallet_balance'] + data['mining_earnings'] + data['referral_earnings']
+            balance_text = f"""{get_text(user_id, 'your_balance', balance=total)}
 
 💼 الرصيد الرئيسي: {data['wallet_balance']:.2f} USDT
-⛏️ أرباح التعدين: {data['mining_earnings']:.2f} USDT
-👥 أرباح الإحالات: {data['referral_earnings']:.2f} USDT
-
-💵 **الإجمالي: {total_balance:.2f} USDT**
-
-📈 استمر في التعدين ودعوة الأصدقاء لزيادة أرباحك!"""
-    
-    bot.edit_message_text(
-        balance_text,
-        chat_id=call.message.chat.id,
-        message_id=call.message.message_id,
-        reply_markup=back_to_main_keyboard()
-    )
-
-def show_mining(call):
-    user_id = call.from_user.id
-    data = user_data[str(user_id)]
-    
-    progress_percent = (data['mining_progress'] / data['max_mining']) * 100
-    progress_bar = "🟢" * int(progress_percent / 10) + "⚪" * (10 - int(progress_percent / 10))
-    
-    mining_text = f"""⛏️ **التعدين التلقائي**
+⛏️ أرباح التعدين: {data['mining_earnings']:.2f} USDT  
+👥 أرباح الإحالات: {data['referral_earnings']:.2f} USDT"""
+            
+            bot.edit_message_text(
+                balance_text,
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                reply_markup=back_keyboard(user_id)
+            )
+        
+        elif call.data == "mining":
+            progress_percent = (data['mining_progress'] / data['max_mining']) * 100
+            progress_bar = "🟢" * int(progress_percent / 10) + "⚪" * (10 - int(progress_percent / 10))
+            
+            mining_text = f"""⛏️ **التعدين التلقائي**
 
 {progress_bar}
 {data['mining_progress']:.2f} / {data['max_mining']:.2f} USDT
@@ -219,257 +291,162 @@ def show_mining(call):
 📊 التقدم: {progress_percent:.1f}%
 ⏰ الحالة: {'🟢 جاري التعدين...' if data['mining_progress'] < data['max_mining'] else '✅ اكتمل اليوم'}
 
-💡 التعدين يعمل تلقائياً! عد لاحقاً لتحصيل أرباحك."""
-    
-    bot.edit_message_text(
-        mining_text,
-        chat_id=call.message.chat.id,
-        message_id=call.message.message_id,
-        reply_mup=back_to_main_keyboard()
-    )
+{get_text(user_id, 'mining_progress')}"""
+            
+            bot.edit_message_text(
+                mining_text,
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                reply_markup=back_keyboard(user_id)
+            )
+        
+        elif call.data == "referrals":
+            link = f"https://t.me/BNBMini1Bot?start={user_id}"
+            referrals_text = f"""👥 **نظام الإحالات**
 
-def show_referrals(call):
-    user_id = call.from_user.id
-    data = user_data[str(user_id)]
-    
-    referrals_text = f"""👥 **نظام الإحالات المربح**
-
-🎯 **الرابط الشخصي:**
-`{get_referral_link(user_id)}`
+🎯 **رابط الدعوة:**
+`{link}`
 
 📊 **إحصائياتك:**
 • 👥 الإحالات: {data['referrals_count']}
 • 💰 الأرباح: {data['referral_earnings']:.2f} USDT
-• 📅 إحالات اليوم: {data['today_referrals']}
 
 🎁 **المكافآت:**
-• 🎊 1.00 USDT لكل صديق
-• 💰 5.00 USDT مكافأة إضافية لكل 5 إحالات"""
-    
-    bot.edit_message_text(
-        referrals_text,
-        chat_id=call.message.chat.id,
-        message_id=call.message.message_id,
-        reply_markup=referrals_keyboard()
-    )
+• 1.00 USDT لكل صديق
+• 5.00 USDT مكافأة إضافية لكل 5 إحالات"""
+            
+            keyboard = InlineKeyboardMarkup()
+            keyboard.add(InlineKeyboardButton("📋 نسخ رابط الدعوة", callback_data="copy_referral"))
+            keyboard.add(InlineKeyboardButton(get_text(user_id, 'back'), callback_data="main_menu"))
+            
+            bot.edit_message_text(
+                referrals_text,
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                reply_markup=keyboard
+            )
+        
+        elif call.data == "copy_referral":
+            link = f"https://t.me/BNBMini1Bot?start={user_id}"
+            bot.answer_callback_query(call.id, f"✅ تم نسخ رابط الدعوة!\n{link}", show_alert=True)
+        
+        elif call.data == "support":
+            support_text = f"""{get_text(user_id, 'support_title')}
 
-def copy_referral_link(call):
-    user_id = call.from_user.id
-    referral_link = get_referral_link(user_id)
-    
-    bot.answer_callback_query(
-        call.id,
-        f"✅ تم نسخ رابط الدعوة!\n\n{referral_link}",
-        show_alert=True
-    )
+{get_text(user_id, 'support_desc')}"""
+            
+            bot.edit_message_text(
+                support_text,
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                reply_markup=support_keyboard(user_id)
+            )
+        
+        elif call.data == "send_support_message":
+            # طلب إدخال رسالة الدعم
+            bot.send_message(
+                user_id, 
+                get_text(user_id, 'support_prompt')
+            )
+            # حفظ حالة المستخدم لاستقبال الرسالة التالية
+            support_messages[str(user_id)] = True
+        
+        elif call.data in ["games", "tasks", "wallet"]:
+            messages = {
+                "games": "🎮 **الألعاب قريباً**\n\nسيتم إضافة الألعاب قريباً بمكافآت USDT!",
+                "tasks": "📋 **المهام قريباً**\n\nسيتم إضافة المهام اليومية قريباً!",
+                "wallet": "💳 **المحفظة قريباً**\n\nسيتم تفعيل الإيداع والسحب قريباً!"
+            }
+            
+            bot.edit_message_text(
+                messages[call.data],
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                reply_markup=back_keyboard(user_id)
+            )
+            
+    except Exception as e:
+        print(f"❌ خطأ في callback: {e}")
+        try:
+            bot.answer_callback_query(call.id, "⚠️ حدث خطأ، يرجى المحاولة مرة أخرى")
+        except:
+            pass
 
-def show_my_referrals(call):
-    user_id = call.from_user.id
-    data = user_data[str(user_id)]
-    
-    referrals_list = "👥 **قائمة الإحالات**\n\n"
-    
-    if data['referrals_count'] > 0:
-        referrals_list += f"📊 إجمالي الإحالات: {data['referrals_count']}\n"
-        referrals_list += f"💰 أرباح الإحالات: {data['referral_earnings']:.2f} USDT\n"
-        referrals_list += f"📅 إحالات اليوم: {data['today_referrals']}\n\n"
-        referrals_list += "🆔 **تم تسجيل الإحالات بواسطة:**\n"
-        referrals_list += f"• نظام تتبع برقم المستخدم"
-    else:
-        referrals_list += "❌ لم تقم بدعوة أي أصدقاء بعد.\n\n"
-        referrals_list += "🎯 استخدم رابط الدعوة الخاص بك لبدء جني الأرباح!"
-    
-    bot.edit_message_text(
-        referrals_list,
-        chat_id=call.message.chat.id,
-        message_id=call.message.message_id,
-        reply_markup=referrals_keyboard()
-    )
+# معالجة رسائل الدعم من المستخدمين
+@bot.message_handler(func=lambda message: True)
+def handle_support_messages(message):
+    try:
+        user_id = message.from_user.id
+        
+        # إذا كان المستخدم في وضع إرسال رسالة دعم
+        if str(user_id) in support_messages and support_messages[str(user_id)]:
+            message_text = message.text.strip()
+            
+            if len(message_text) < 5:
+                bot.send_message(user_id, get_text(user_id, 'support_error'))
+                return
+            
+            # إرسال الرسالة إلى حسابك الشخصي
+            success = send_support_notification(
+                user_id, 
+                message_text,
+                message.from_user.username or "بدون معرف",
+                message.from_user.first_name or "بدون اسم"
+            )
+            
+            if success:
+                bot.send_message(user_id, get_text(user_id, 'support_success'))
+                print(f"✅ تم إرسال رسالة دعم من user_id: {user_id}")
+            else:
+                bot.send_message(user_id, "❌ فشل في إرسال الرسالة، يرجى المحاولة لاحقاً")
+            
+            # إعادة تعيين حالة الدعم
+            support_messages[str(user_id)] = False
+            
+            # العودة للقائمة الرئيسية
+            welcome = f"""{get_text(user_id, 'welcome')}
 
-def show_games(call):
-    user_id = call.from_user.id
-    data = user_data[str(user_id)]
-    
-    games_text = f"""🎮 **الألعاب والجوائز**
+{get_text(user_id, 'your_balance', balance=user_data[str(user_id)]['wallet_balance'])}
+{get_text(user_id, 'mining_status', 
+          progress=user_data[str(user_id)]['mining_progress'],
+          percent=(user_data[str(user_id)]['mining_progress'] / 2.0) * 100)}
+{get_text(user_id, 'referrals_count', count=user_data[str(user_id)]['referrals_count'])}
 
-🎰 **لعبة السلوت**
-• المحاولات: {data['attempts_left']}
-• الجولات: {data['total_games_played']}
+🚀 اختر من الأزرار:"""
+            
+            bot.send_message(user_id, welcome, reply_markup=main_menu_keyboard(user_id))
+            
+        else:
+            # إذا لم يكن في وضع دعم، إرسال القائمة الرئيسية
+            if str(user_id) not in user_language:
+                bot.send_message(user_id, get_text(user_id, 'choose_language'), reply_markup=language_keyboard())
+            else:
+                bot.send_message(user_id, "🔍 استخدم الأزرار من خلال /start", reply_markup=main_menu_keyboard(user_id))
+                
+    except Exception as e:
+        print(f"❌ خطأ في معالجة رسالة الدعم: {e}")
 
-🏆 **الجوائز:**
-• 3 رموز متطابقة: 🎉 1.00 USDT
-• رمزين متطابقين: 🎊 0.25 USDT
+@bot.message_handler(commands=['status'])
+def status_cmd(message):
+    user_id = message.from_user.id
+    bot.send_message(user_id, "✅ البوت يعمل بشكل طبيعي! 🟢")
 
-💡 كل إحالة = +2 محاولات جديدة"""
-    
-    bot.edit_message_text(
-        games_text,
-        chat_id=call.message.chat.id,
-        message_id=call.message.message_id,
-        reply_markup=games_keyboard()
-    )
-
-def show_wallet(call):
-    user_id = call.from_user.id
-    data = user_data[str(user_id)]
-    total_balance = data['wallet_balance'] + data['mining_earnings'] + data['referral_earnings']
-    
-    wallet_text = f"""💳 **المحفظة والشروط**
-
-💰 **الرصيد المتاح:** {total_balance:.2f} USDT
-
-💎 **عنوان الإيداع (BEP20):**
-`0xfc712c9985507a2eb44df1ddfe7f09ff7613a19b`
-
-📋 **متطلبات السحب:**
-✅ 7 أيام تسجيل متتالي
-✅ إيداع 10 USDT كحد أدنى  
-✅ إكمال 5 مهام
-✅ 3 إحالات على الأقل
-✅ الحد الأدنى للسحب: 100 USDT"""
-    
-    bot.edit_message_text(
-        wallet_text,
-        chat_id=call.message.chat.id,
-        message_id=call.message.message_id,
-        reply_markup=wallet_keyboard()
-    )
-
-def copy_deposit_address(call):
-    address = "0xfc712c9985507a2eb44df1ddfe7f09ff7613a19b"
-    bot.answer_callback_query(
-        call.id,
-        f"✅ تم نسخ عنوان الإيداع!\n\n{address}",
-        show_alert=True
-    )
-
-def play_slot_game(call):
-    user_id = call.from_user.id
-    data = user_data[str(user_id)]
-    
-    if data['attempts_left'] <= 0:
-        bot.answer_callback_query(call.id, "❌ انتهت المحاولات! ادعُ أصدقاء للحصول على المزيد", show_alert=True)
-        return
-    
-    data['attempts_left'] -= 1
-    data['total_games_played'] += 1
-    
-    symbols = ['🍒', '🍋', '🍊', '⭐', '🔔', '7️⃣']
-    result = [random.choice(symbols) for _ in range(3)]
-    
-    prize = 0
-    if result[0] == result[1] == result[2]:
-        prize = 1.00
-        win_msg = "🎉 فوز كبير! +1.00 USDT"
-    elif result[0] == result[1] or result[1] == result[2]:
-        prize = 0.25
-        win_msg = "🎊 فوز! +0.25 USDT"
-    else:
-        win_msg = "💔 حظ أوفر في المرة القادمة!"
-    
-    if prize > 0:
-        data['mining_earnings'] += prize
-    
-    game_result = f"""🎰 **نتيجة اللعبة**
-
-{' | '.join(result)}
-
-{win_msg}
-
-🔄 المحاولات المتبقية: {data['attempts_left']}"""
-    
-    bot.edit_message_text(
-        game_result,
-        chat_id=call.message.chat.id,
-        message_id=call.message.message_id,
-        reply_markup=games_keyboard()
-    )
-
-def show_tasks(call):
-    user_id = call.from_user.id
-    data = user_data[str(user_id)]
-    
-    tasks_text = f"""📋 **المهام اليومية**
-
-🔥 تسجيل متتالي: {data['consecutive_days']}/7 أيام
-
-✅ **المهام المتاحة:**
-• تسجيل الدخول اليومي - 0.10 USDT
-• اكتمال التعدين - 0.20 USDT  
-• لعب 3 جولات - 0.15 USDT
-• دعوة صديق - 1.00 USDT
-• 7 أيام متتالية - 5.00 USDT
-
-📊 المكتمل: {data['completed_tasks']}/5"""
-    
-    bot.edit_message_text(
-        tasks_text,
-        chat_id=call.message.chat.id,
-        message_id=call.message.message_id,
-        reply_markup=back_to_main_keyboard()
-    )
-
-def show_support(call):
-    support_text = """📞 **الدعم الفني**
-
-💬 لطلب المساعدة، اكتب رسالتك مباشرة في هذه الدردشة وسيتم إرسالها لفريق الدعم.
-
-⏰ وقت الاستجابة: 24 ساعة
-
-📝 **نصيحة:** اشرح مشكلتك بوضوح مع تقديم أي تفاصيل تساعد في حلها."""
-    
-    bot.edit_message_text(
-        support_text,
-        chat_id=call.message.chat.id,
-        message_id=call.message.message_id,
-        reply_markup=back_to_main_keyboard()
-    )
-
-def show_deposit(call):
-    deposit_text = """💳 **طريقة الإيداع**
-
-💎 **عنوان المحفظة (BEP20):**
-`0xfc712c9985507a2eb44df1ddfe7f09ff7613a19b`
-
-⚠️ **تنبيه مهم:**
-• استخدم شبكة BEP20 فقط
-• تأكد من العنوان قبل الإرسال
-• الحد الأدنى للإيداع: 10 USDT
-
-💰 بعد الإيداع، سيتم تحديث رصيدك تلقائياً."""
-    
-    bot.edit_message_text(
-        deposit_text,
-        chat_id=call.message.chat.id,
-        message_id=call.message.message_id,
-        reply_markup=wallet_keyboard()
-    )
-
-def show_withdraw(call):
-    user_id = call.from_user.id
-    data = user_data[str(user_id)]
-    total_balance = data['wallet_balance'] + data['mining_earnings'] + data['referral_earnings']
-    
-    withdraw_text = f"""🔄 **طلب السحب**
-
-💰 الرصيد المتاح: {total_balance:.2f} USDT
-
-📋 **الشروط المطلوبة:**
-{'✅' if data['consecutive_days'] >= 7 else '❌'} 7 أيام تسجيل متتالي
-{'✅' if data['total_deposited'] >= 10 else '❌'} إيداع 10 USDT  
-{'✅' if data['completed_tasks'] >= 5 else '❌'} إكمال 5 مهام
-{'✅' if data['referrals_count'] >= 3 else '❌'} 3 إحالات على الأقل
-{'✅' if total_balance >= 100 else '❌'} الحد الأدنى 100 USDT
-
-💳 لطلب السحب، راسل الدعم الفني."""
-    
-    bot.edit_message_text(
-        withdraw_text,
-        chat_id=call.message.chat.id,
-        message_id=call.message.message_id,
-        reply_markup=wallet_keyboard()
-    )
+def start_bot():
+    while True:
+        try:
+            print("🔄 جاري تشغيل البوت...")
+            bot_info = bot.get_me()
+            print(f"✅ البوت يعمل: @{bot_info.username}")
+            print(f"🎯 ID حساب الدعم: {SUPPORT_USER_ID}")
+            
+            # بدء الاستماع للرسائل
+            bot.polling(none_stop=True, timeout=30)
+            
+        except Exception as e:
+            print(f"❌ خطأ في البوت: {e}")
+            print("🔄 إعادة المحاولة خلال 10 ثوان...")
+            time.sleep(10)
 
 if __name__ == "__main__":
-    print("🤖 بوت التعدين يعمل بنجاح...")
-    bot.polling(none_stop=True)
+    print("🚀 بدء تشغيل بوت التعدين مع نظام الدعم...")
+    start_bot()
