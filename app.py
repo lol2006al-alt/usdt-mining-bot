@@ -950,28 +950,36 @@ def keep_alive():
             print(f"🔄 إعادة تشغيل Keep-alive: {e}")
             time.sleep(10)
 
-# 🚀 بدء التشغيل بنظام السرعة الفائقة
+# 🌐 إعداد ويب هوك للتشغيل على Render
+@app.route('/')
+def index():
+    return "🤖 البوت يعمل بشكل صحيح! استخدم /start في التلجرام"
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return 'OK', 200
+    else:
+        return 'Forbidden', 403
+
+# 🚀 بدء التشغيل على Render
 if __name__ == "__main__":
-    print("🚀 بدأ تشغيل البوت بنظام السرعة الفائقة...")
-    
-    # تشغيل نظام Keep-alive في الخلفية
-    keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
-    keep_alive_thread.start()
+    print("🚀 بدأ تشغيل البوت على Render...")
     
     try:
-        # إزالة أي Webhook سابق
+        # إعداد ويب هوك
         bot.remove_webhook()
         time.sleep(2)
         
-        # بدء التشغيل بنظام Polling السريع
-        print("🔄 بدء نظام Polling السريع...")
-        bot.infinity_polling(
-            timeout=20,
-            long_polling_timeout=10,
-            skip_pending=True
-        )
+        # استخدام البورت من متغيرات البيئة
+        PORT = int(os.environ.get('PORT', 10000))
+        
+        # تشغيل الخادم
+        print(f"🌐 بدأ تشغيل الخادم على المنفذ {PORT}")
+        app.run(host='0.0.0.0', port=PORT, debug=False)
         
     except Exception as e:
         print(f"❌ خطأ في التشغيل: {e}")
-        print("🔄 إعادة التشغيل خلال 10 ثواني...")
-        time.sleep(10)
