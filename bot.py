@@ -14,7 +14,7 @@ PORT = int(os.environ.get('PORT', 10000))
 
 # 🔧 إعدادات البوت
 BOT_TOKEN = "8385331860:AAFTz51bMqPjtEBM50p_5WY_pbMytnqS0zc"
-SUPPORT_USER_ID = "YOUR_USER_ID_HERE"  # ⚠️ ضع هنا ID حسابك
+SUPPORT_USER_ID = "YOUR_USER_ID_HERE"  # 8400225549
 
 bot = telebot.TeleBot(BOT_TOKEN)
 WEBHOOK_URL = f"https://usdt-mining-bot-wmvf.onrender.com/{BOT_TOKEN}"
