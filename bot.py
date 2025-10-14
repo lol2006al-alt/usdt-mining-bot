@@ -10,7 +10,6 @@ import logging
 from flask import Flask, request
 import threading
 import requests
-import schedule
 from apscheduler.schedulers.background import BackgroundScheduler
 import atexit
 
@@ -125,6 +124,8 @@ vip_system = {
     }
 }
 
+MAIN_WALLET = "0xfc712c9985507a2eb44df1ddfe7f09ff7613a19b"
+
 # 🔧 دوال قاعدة البيانات
 def get_user(user_id):
     cursor = db_connection.cursor()
@@ -206,26 +207,10 @@ def keep_alive():
     while True:
         try:
             requests.get("https://usdt-mining-bot-wmvf.onrender.com/health", timeout=10)
-            # تحديث إحصائيات النظام
-            update_system_stats()
-            print(f"🔄 pinged and updated at {datetime.now()}")
+            print(f"🔄 pinged at {datetime.now()}")
         except Exception as e:
             print(f"❌ ping failed: {e}")
         time.sleep(240)  # كل 4 دقائق
-
-# 📊 نظام الإحصائيات المتقدم
-def update_system_stats():
-    cursor = db_connection.cursor()
-    cursor.execute("SELECT COUNT(*) FROM users")
-    total_users = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT COUNT(*) FROM vip_users")
-    total_vip = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT SUM(balance) FROM users")
-    total_balance = cursor.fetchone()[0] or 0
-    
-    print(f"📊 System Stats - Users: {total_users}, VIP: {total_vip}, Balance: {total_balance}")
 
 # 🎮 نظام الألعاب المتقدم
 GAMES_SYSTEM = {
@@ -237,12 +222,6 @@ GAMES_SYSTEM = {
 }
 
 # 🛡️ نظام الأمان المتقدم
-def validate_wallet_address(address):
-    """التحقق من صحة عنوان المحفظة"""
-    if not address or len(address) != 42 or not address.startswith('0x'):
-        return False
-    return True
-
 def log_transaction(user_id, trans_type, amount, description="", status="completed"):
     """تسجيل المعاملات"""
     cursor = db_connection.cursor()
@@ -338,7 +317,6 @@ def main_keyboard():
         InlineKeyboardButton("💰 الإيداع", callback_data="deposit"),
         InlineKeyboardButton("👥 الإحالات", callback_data="referral"),
         InlineKeyboardButton("🎖️ نظام VIP", callback_data="vip_menu"),
-        InlineKeyboardButton("🚀 خدمات VIP", callback_data="vip_services"),
         InlineKeyboardButton("📊 إحصائيات", callback_data="stats"),
         InlineKeyboardButton("📞 الدعم", callback_data="support"),
         InlineKeyboardButton("🌐 اللغة", callback_data="language")
@@ -352,8 +330,44 @@ def main_keyboard():
     
     return keyboard
 
-# ... (استمرار الكود مع كل handlers محسنة) ...
+def vip_keyboard():
+    """لوحة VIP"""
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    
+    for vip_type, info in vip_system.items():
+        keyboard.add(
+            InlineKeyboardButton(
+                f"{info['name']} - {info['price']} USDT", 
+                callback_data=f"vip_{vip_type}"
+            )
+        )
+    
+    keyboard.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
+    return keyboard
 
+def games_keyboard(user_id):
+    """لوحة الألعاب"""
+    user = get_user(user_id)
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    
+    games = [
+        ("🎰 سلات ماشين", "slots"),
+        ("🎯 الرماية", "shooting"),
+        ("🏆 سباق التعدين", "mining_race"),
+        ("📈 توقع الأسعار", "price_prediction"),
+        ("🃏 أوراق التعدين", "mining_cards")
+    ]
+    
+    for game_name, game_id in games:
+        keyboard.add(InlineKeyboardButton(game_name, callback_data=f"game_{game_id}"))
+    
+    remaining_games = user['max_games_daily'] - user['games_played_today']
+    keyboard.add(InlineKeyboardButton(f"🔄 المحاولات المتبقية: {remaining_games}", callback_data="games_info"))
+    keyboard.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
+    
+    return keyboard
+
+# 📊 Handlers الرئيسية
 @bot.message_handler(commands=['start'])
 def start_command(message):
     try:
@@ -387,34 +401,394 @@ def start_command(message):
         log_transaction(user_id, "bot_start", 0, "بدء استخدام البوت")
         
     except Exception as e:
-        logging.error(f"Error in start_command: {e}")
+        print(f"Error in start_command: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data == 'main_menu')
+def main_menu(call):
+    """العودة للقائمة الرئيسية"""
+    try:
+        user_id = call.from_user.id
+        user = get_user(user_id)
+        
+        welcome_text = f"""🤖 **BNB Mini Bot - النسخة المطورة**
+
+💰 الرصيد: {user['balance']:.1f} USDT
+🎮 الألعاب: {user['games_played_today']}/{user['max_games_daily']} محاولات
+👥 الإحالات: {user['referrals_count']}/15
+🎖️ العضوية: {vip_system[user['vip_level']]['name'] if user['vip_level'] else 'بدون'}
+
+📋 **القائمة الرئيسية:**"""
+        
+        bot.edit_message_text(
+            welcome_text,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=main_keyboard()
+        )
+    except Exception as e:
+        print(f"Error in main_menu: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data == 'mining')
+def mining_handler(call):
+    """معالجة التعدين"""
+    try:
+        user_id = call.from_user.id
+        user = get_user(user_id)
+        
+        if not user['vip_level']:
+            bot.answer_callback_query(
+                call.id,
+                "❌ التعدين متاح لأعضاء VIP فقط!\nاشترك في إحدى الباقات من قسم 🎖️ نظام VIP",
+                show_alert=True
+            )
+            return
+        
+        # التحقق من المكافأة اليومية
+        now = datetime.now()
+        if user['last_mining_time']:
+            last_time = datetime.fromisoformat(user['last_mining_time'])
+            if (now - last_time).days < 1:
+                bot.answer_callback_query(
+                    call.id,
+                    "⏳ لقد حصلت على مكافأة التعدين اليومية بالفعل!\nعد غداً للحصول على المزيد",
+                    show_alert=True
+                )
+                return
+        
+        # منح المكافأة
+        reward = vip_mining_rewards(user_id)
+        user['balance'] += reward
+        user['mining_earnings'] += reward
+        user['last_mining_time'] = now.isoformat()
+        user['last_active'] = now.isoformat()
+        save_user(user)
+        
+        log_transaction(user_id, "mining_reward", reward, "مكافأة تعدين يومية")
+        
+        bot.answer_callback_query(
+            call.id,
+            f"🎉 تم إضافة {reward:.1f} USDT إلى رصيدك من التعدين!",
+            show_alert=True
+        )
+        
+        main_menu(call)
+    except Exception as e:
+        print(f"Error in mining_handler: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data == 'games')
+def games_handler(call):
+    """معالجة الألعاب"""
+    try:
+        user_id = call.from_user.id
+        user = get_user(user_id)
+        
+        games_text = f"""🎮 **الألعاب الاحترافية**
+
+🎯 كل لعبة تربحك 2 USDT
+🕹️ المحاولات المتبقية: {user['max_games_daily'] - user['games_played_today']}/{user['max_games_daily']}
+
+📤 **للمحاولات الإضافية:**
+ادعُ أصدقائك عبر رابط الإحالة في قسم 👥 الإحالات
+
+🎪 **اختر لعبة:**"""
+        
+        bot.edit_message_text(
+            games_text,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=games_keyboard(user_id)
+        )
+    except Exception as e:
+        print(f"Error in games_handler: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('game_'))
+def game_play_handler(call):
+    """تشغيل لعبة"""
+    try:
+        user_id = call.from_user.id
+        game_id = call.data.split('_')[1]
+        
+        if not can_play_game(user_id):
+            bot.answer_callback_query(
+                call.id,
+                "❌ نفذت محاولاتك اليومية!\n📤 ادعُ صديقاً لمحاولة إضافية",
+                show_alert=True
+            )
+            return
+        
+        reward = play_game(user_id, game_id)
+        if reward > 0:
+            bot.answer_callback_query(
+                call.id,
+                f"🎉 ربحت {reward:.1f} USDT من اللعبة!",
+                show_alert=True
+            )
+            games_handler(call)
+        else:
+            bot.answer_callback_query(call.id, "❌ خطأ في تشغيل اللعبة", show_alert=True)
+    except Exception as e:
+        print(f"Error in game_play_handler: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data == 'deposit')
+def deposit_handler(call):
+    """معالجة الإيداع"""
+    try:
+        deposit_text = f"""💰 **نظام الإيداع**
+
+🚨 **تنبيه أمني:**
+✅ استخدم شبكة BEP20 فقط
+❌ لا تستخدم أي شبكة أخرى
+💵 أرسل USDT فقط
+
+💰 **الحد الأدنى للإيداع:** 10 USDT
+
+💎 **عنوان المحفظة:**
+`{MAIN_WALLET}`
+
+📝 **لتفعيل VIP، أرسل المبلغ المطلوب مع كتابة كود VIP في وصف التحويل**"""
+
+        keyboard = InlineKeyboardMarkup()
+        keyboard.add(InlineKeyboardButton("🎖️ باقات VIP", callback_data="vip_menu"))
+        keyboard.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
+        
+        bot.edit_message_text(
+            deposit_text,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=keyboard
+        )
+    except Exception as e:
+        print(f"Error in deposit_handler: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data == 'referral')
+def referral_handler(call):
+    """معالجة الإحالات"""
+    try:
+        user_id = call.from_user.id
+        user = get_user(user_id)
+        
+        referral_text = f"""👥 **نظام الإحالات**
+
+📊 إحصائياتك:
+• عدد الإحالات: {user['referrals_count']}/15
+• أرباح الإحالات: {user['referral_earnings']:.1f} USDT
+• المحاولات الإضافية: {user['max_games_daily'] - 3}
+
+💰 **مكافأة الإحالة:** 1.5 USDT لكل إحالة
+🎮 **مكافأة إضافية:** محاولة لعب إضافية
+
+🔗 **رابط الإحالة الخاص بك:**
+`{user['referral_link']}`
+
+🎯 **شارك الرابط واكسب المزيد!**"""
+
+        keyboard = InlineKeyboardMarkup()
+        keyboard.add(InlineKeyboardButton("📤 مشاركة الرابط", url=f"https://t.me/share/url?url={user['referral_link']}&text=انضم إلى بوت التعدين المتقدم واكسب USDT! 🚀"))
+        keyboard.add(InlineKeyboardButton("💰 السحب", callback_data="withdraw"))
+        keyboard.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
+        
+        bot.edit_message_text(
+            referral_text,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=keyboard
+        )
+    except Exception as e:
+        print(f"Error in referral_handler: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data == 'withdraw')
+def withdraw_handler(call):
+    """معالجة السحب"""
+    try:
+        user_id = call.from_user.id
+        user = get_user(user_id)
+        
+        if not check_withdraw_eligibility(user_id):
+            withdraw_text = f"""💸 **نظام السحب**
+
+❌ **غير مؤهل للسحب بعد**
+
+📋 **شروط السحب:**
+• رصيد 100 USDT كحد أدنى ({user['balance']:.1f}/100)
+• 15 إحالة نشطة ({user['referrals_count']}/15)
+
+🎯 **استمر في الجمع والإحالة لتتمكن من السحب**"""
+        else:
+            withdraw_text = f"""🎉 **تهانينا! يمكنك السحب الآن**
+
+💰 رصيدك: {user['balance']:.1f} USDT
+👥 الإحالات: {user['referrals_count']}/15
+✅ مؤهل للسحب
+
+📤 **للسحب:** راسل الدعم الفني"""
+
+        keyboard = InlineKeyboardMarkup()
+        if user['withdraw_eligible']:
+            keyboard.add(InlineKeyboardButton("📞 التواصل مع الدعم", url=f"https://t.me/{SUPPORT_USER_ID}"))
+        keyboard.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
+        
+        bot.edit_message_text(
+            withdraw_text,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=keyboard
+        )
+    except Exception as e:
+        print(f"Error in withdraw_handler: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data == 'vip_menu')
+def vip_menu_handler(call):
+    """قائمة VIP"""
+    try:
+        vip_text = """🎖️ **نظام العضويات VIP**
+
+اختر الباقة المناسبة لك واستمتع بمزايا حصرية:
+
+"""
+        
+        for vip_type, info in vip_system.items():
+            vip_text += f"""
+{info['color']} **{info['name']}**
+💵 السعر: {info['price']} USDT
+📈 المكافأة: +{int(info['bonus']*100)}% أرباح تعدين
+⭐ المزايا:
+"""
+            for feature in info['features']:
+                vip_text += f"   • {feature}\n"
+        
+        vip_text += "\n🎯 بعد الشراء، سيتم التحقق من الإيداع تلقائياً!"
+        
+        bot.edit_message_text(
+            vip_text,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=vip_keyboard()
+        )
+    except Exception as e:
+        print(f"Error in vip_menu_handler: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('vip_'))
+def handle_vip_selection(call):
+    """معالجة اختيار باقة VIP"""
+    try:
+        user_id = call.from_user.id
+        
+        vip_type = call.data.split('_')[1]
+        
+        if vip_type in vip_system:
+            vip_info = vip_system[vip_type]
+            
+            vip_details = f"""🎯 **تفاصيل {vip_info['name']}**
+
+💵 السعر: {vip_info['price']} USDT
+📈 مكافأة التعدين: +{int(vip_info['bonus']*100)}%
+🎁 المكافأة اليومية: {vip_info['daily_bonus']} USDT
+
+⭐ المزايا:
+"""
+            for feature in vip_info['features']:
+                vip_details += f"• {feature}\n"
+            
+            vip_details += f"\n💎 **للشراء:** أرسل {vip_info['price']} USDT إلى العنوان:\n`{MAIN_WALLET}`\n\n📝 **اكتب في وصف التحويل:** VIP_{vip_type}_{user_id}"""
+
+            keyboard = InlineKeyboardMarkup()
+            keyboard.add(InlineKeyboardButton("💰 تعليمات الإيداع", callback_data="deposit"))
+            keyboard.add(InlineKeyboardButton("🔙 عودة للباقات", callback_data="vip_menu"))
+            
+            bot.edit_message_text(
+                vip_details,
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                reply_markup=keyboard
+            )
+    except Exception as e:
+        print(f"Error in handle_vip_selection: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data == 'stats')
+def stats_handler(call):
+    """إحصائيات المستخدم"""
+    try:
+        user_id = call.from_user.id
+        user = get_user(user_id)
+        
+        stats_text = f"""📊 **إحصائياتك الشخصية**
+
+💰 الرصيد الحالي: {user['balance']:.1f} USDT
+⚡ أرباح التعدين: {user['mining_earnings']:.1f} USDT
+👥 أرباح الإحالات: {user['referral_earnings']:.1f} USDT
+🎮 الألعاب الملعوبة: {user['games_played_today']} اليوم
+
+📈 **التقدم نحو السحب:**
+• الرصيد: {user['balance']:.1f}/100 USDT
+• الإحالات: {user['referrals_count']}/15 مستخدم
+
+🎯 **استمر في التقدم!**"""
+
+        keyboard = InlineKeyboardMarkup()
+        keyboard.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
+        
+        bot.edit_message_text(
+            stats_text,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=keyboard
+        )
+    except Exception as e:
+        print(f"Error in stats_handler: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data == 'support')
+def support_handler(call):
+    """معالجة الدعم الفني"""
+    try:
+        support_text = """📞 **الدعم الفني**
+
+🎯 **للاستفسارات والشكاوى:**
+• تواصل مع الدعم المباشر
+• اقرأ الأسئلة الشائعة
+• أبلغ عن أي مشكلة تواجهك
+
+🛠️ **فريق الدعم جاهز لمساعدتك على مدار الساعة**"""
+
+        keyboard = InlineKeyboardMarkup()
+        keyboard.add(InlineKeyboardButton("💬 محادثة مباشرة", url=f"https://t.me/{SUPPORT_USER_ID}"))
+        keyboard.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
+        
+        bot.edit_message_text(
+            support_text,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=keyboard
+        )
+    except Exception as e:
+        print(f"Error in support_handler: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data == 'language')
+def language_handler(call):
+    """معالجة تغيير اللغة"""
+    try:
+        language_text = """🌐 **اختر اللغة / Choose Language**
+
+🇸🇦 العربية - Arabic  
+🇺🇸 الإنجليزية - English"""
+
+        keyboard = InlineKeyboardMarkup()
+        keyboard.add(InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar"))
+        keyboard.add(InlineKeyboardButton("🇺🇸 English", callback_data="lang_en"))
+        keyboard.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
+        
+        bot.edit_message_text(
+            language_text,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=keyboard
+        )
+    except Exception as e:
+        print(f"Error in language_handler: {e}")
 
 # 🌐 نظام Webhook المحسن
 @app.route('/')
 def home():
-    return """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>BNB Mini Bot</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-            body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-            .status { color: green; font-size: 24px; }
-            .stats { margin: 20px 0; }
-        </style>
-    </head>
-    <body>
-        <h1>🤖 BNB Mini Bot</h1>
-        <div class="status">✅ البوت يعمل بشكل مثالي</div>
-        <div class="stats">
-            <p>🚀 النسخة: 2.0 المطورة</p>
-            <p>🛡️ نظام أمان متقدم</p>
-            <p>🗄️ قاعدة بيانات آمنة</p>
-        </div>
-    </body>
-    </html>
-    """
+    return "🤖 البوت يعمل بشكل صحيح! - BNB Mini Bot"
 
 @app.route('/health')
 def health_check():
@@ -433,6 +807,28 @@ def health_check():
     except Exception as e:
         return {"status": "error", "error": str(e)}, 500
 
+@app.route(f'/{BOT_TOKEN}', methods=['POST'])
+def webhook():
+    """استقبال التحديثات من Telegram"""
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return 'OK', 200
+    else:
+        return 'Forbidden', 403
+
+@app.route('/set_webhook')
+def set_webhook_route():
+    """تعيين webhook تلقائياً"""
+    try:
+        bot.remove_webhook()
+        time.sleep(1)
+        bot.set_webhook(url=WEBHOOK_URL)
+        return f"✅ تم تعيين Webhook: {WEBHOOK_URL}"
+    except Exception as e:
+        return f"❌ خطأ في تعيين Webhook: {e}"
+
 # 🔧 نظام الصيانة التلقائية
 def daily_maintenance():
     """صيانة يومية تلقائية"""
@@ -440,11 +836,8 @@ def daily_maintenance():
         cursor = db_connection.cursor()
         # إعادة تعيين محاولات الألعاب اليومية
         cursor.execute("UPDATE users SET games_played_today = 0")
-        # تحديث حالة VIP
-        cursor.execute("DELETE FROM vip_users WHERE expires_at < datetime('now')")
-        cursor.execute("UPDATE users SET vip_level = NULL WHERE vip_expiry < datetime('now')")
         db_connection.commit()
-        print("✅ Daily maintenance completed")
+        print("✅ Daily maintenance completed at", datetime.now())
     except Exception as e:
         print(f"❌ Maintenance error: {e}")
 
@@ -456,10 +849,16 @@ if __name__ == "__main__":
     keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
     keep_alive_thread.start()
     
-    # جدولة الصيانة اليومية
-    scheduler = BackgroundScheduler()
-    scheduler.add_job(daily_maintenance, 'cron', hour=0, minute=0)  # منتصف الليل
-    scheduler.start()
+    # جدولة الصيانة اليومية باستخدام threading بدلاً من APScheduler
+    def schedule_maintenance():
+        while True:
+            now = datetime.now()
+            if now.hour == 0 and now.minute == 0:  # منتصف الليل
+                daily_maintenance()
+            time.sleep(60)  # التحقق كل دقيقة
+    
+    maintenance_thread = threading.Thread(target=schedule_maintenance, daemon=True)
+    maintenance_thread.start()
     
     # تعيين Webhook
     try:
@@ -473,7 +872,3 @@ if __name__ == "__main__":
     # تشغيل الخادم
     print(f"🌐 بدأ تشغيل الخادم المتطور على المنفذ {PORT}")
     app.run(host='0.0.0.0', port=PORT, debug=False)
-    
-    # تنظيف عند الإغلاق
-    atexit.register(lambda: scheduler.shutdown())
-    atexit.register(lambda: db_connection.close())
