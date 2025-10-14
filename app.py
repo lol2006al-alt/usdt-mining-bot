@@ -1020,6 +1020,23 @@ if __name__ == "__main__":
     print("   - 💎 3 مستويات VIP بمزايا حصرية")
     print("   - 🛡️ تنبيهات أمان BEP20")
     
-    # تشغيل الخادم
-    from waitress import serve
-    serve(app, host='0.0.0.0', port=PORT)
+    # 🚀 بدء التشغيل - إصدار Polling
+if __name__ == "__main__":
+    print("🚀 بدأ تشغيل البوت المحدث بنظام Polling...")
+    
+    try:
+        print("🔧 جاري إزالة Webhook السابق...")
+        bot.remove_webhook()
+        time.sleep(2)
+        
+        print("🔄 بدء نظام Polling...")
+        print("✅ البوت جاهز لاستقبال الرسائل!")
+        
+        # بدء Polling بدلاً من Webhook
+        bot.infinity_polling()
+        
+    except Exception as e:
+        print(f"❌ خطأ في التشغيل: {e}")
+        # تشغيل الخادم كبديل
+        from waitress import serve
+        serve(app, host='0.0.0.0', port=PORT)
