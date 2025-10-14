@@ -188,8 +188,22 @@ def add_referral(referrer_id, referred_id):
     cursor.execute("UPDATE users SET referrals_count = referrals_count + 1 WHERE user_id = ?", 
                   (referrer_id,))
     
-    cursor.execute("UPDATE users SET games_played_today = games_played_today - 1 WHERE user_id = ?", 
+    # ✅ التصحيح: منع القيم السالبة في المحاولات
+    cursor.execute("UPDATE users SET games_played_today = MAX(0, games_played_today - 1) WHERE user_id = ?", 
                   (referrer_id,))
+    
+    # ✅ التصحيح: منح مكافأة 1.0 USDT للمُحيل
+    referrer_user = get_user(referrer_id)
+    if referrer_user:
+        referrer_user['balance'] += 1.0
+        referrer_user['total_earned'] += 1.0
+        save_user(referrer_user)
+        
+        # تسجيل معاملة المكافأة للمُحيل
+        cursor.execute(
+            "INSERT INTO transactions (user_id, type, amount, description) VALUES (?, ?, ?, ?)",
+            (referrer_id, 'referral_bonus', 1.0, f"مكافأة إحالة للمستخدم {referred_id}")
+        )
     
     db_connection.commit()
     return True
@@ -314,9 +328,18 @@ def start_command(message):
                 if referrer_user and referrer_id != user_id:
                     if add_referral(referrer_id, user_id):
                         add_balance(user_id, 1.0, "مكافأة انضمام بالإحالة")
-                        referrer_user['games_played_today'] = max(0, referrer_user['games_played_today'] - 1)
-                        save_user(referrer_user)
                         referral_bonus = 1.0
+                        
+                        # ✅ التصحيح: إشعار المُحيل بانضمام صديقه
+                        try:
+                            bot.send_message(
+                                referrer_id,
+                                f"🎉 تم انضمام صديقك باستخدام رابطك!\n"
+                                f"💰 حصلت على 1.0 USDT مكافأة إحالة\n"
+                                f"🎯 وحصلت على محاولة لعب إضافية!"
+                            )
+                        except:
+                            pass
             except:
                 referrer_id = None
         
@@ -938,23 +961,12 @@ def health_check():
     except Exception as e:
         return {"status": "error", "error": str(e)}, 500
 
-# 🔧 نظام Keep-alive محسن
-def keep_alive():
-    while True:
-        try:
-            cursor = db_connection.cursor()
-            cursor.execute("SELECT 1")
-            print(f"✅ البوت نشط - {datetime.now()}")
-            time.sleep(60)
-        except Exception as e:
-            print(f"🔄 إعادة تشغيل Keep-alive: {e}")
-            time.sleep(10)
 # 🌐 إعداد ويب هوك للتشغيل على Render
 @app.route('/')
 def index():
     return "🤖 البوت يعمل بشكل صحيح! استخدم /start في التلجرام"
 
-@app.route('/webhook', methods=['POST'])
+@app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def webhook():
     if request.headers.get('content-type') == 'application/json':
         json_string = request.get_data().decode('utf-8')
@@ -974,7 +986,7 @@ if __name__ == "__main__":
         time.sleep(2)
         
         # ✅ استخدام Webhook مع الرابط الصحيح
-        WEBHOOK_URL = 'https://usdt-bot-working.onrender.com/webhook'
+        WEBHOOK_URL = 'https://usdt-bot-working.onrender.com/' + BOT_TOKEN
         bot.set_webhook(url=WEBHOOK_URL)
         print(f"✅ Webhook مضبوط على: {WEBHOOK_URL}")
         
@@ -985,4 +997,3 @@ if __name__ == "__main__":
         
     except Exception as e:
         print(f"❌ خطأ في التشغيل: {e}")
-
