@@ -6,7 +6,7 @@ import time
 import hashlib
 import json
 import os
-from flask import Flask
+from flask import Flask, request
 
 # 🔧 إعدادات Render - ضرورية للعمل على السحابة
 app = Flask(__name__)
@@ -17,6 +17,7 @@ BOT_TOKEN = "8385331860:AAFTz51bMqPjtEBM50p_5WY_pbMytnqS0zc"
 SUPPORT_USER_ID = "YOUR_USER_ID_HERE"  # ⚠️ ضع هنا ID حسابك
 
 bot = telebot.TeleBot(BOT_TOKEN)
+WEBHOOK_URL = f"https://usdt-mining-bot-wmvf.onrender.com/{BOT_TOKEN}"
 
 # أنظمة التخزين
 user_data = {}
@@ -131,9 +132,9 @@ def start_command(message):
     init_user(user_id)
     
     welcome_text = """
-    🎉 أهلاً بك في بوت التعدين!
-    
-    استخدم /vip لعرض باقات العضويات
+🎉 أهلاً بك في بوت التعدين!
+
+استخدم /vip لعرض باقات العضويات
     """
     bot.send_message(user_id, welcome_text)
 
@@ -315,7 +316,7 @@ def pending_deposits_admin(message):
     else:
         bot.send_message(user_id, "✅ لا توجد إيداعات منتظرة")
 
-# 🌐 خادم ويب لـ Render
+# 🌐 Webhook Routes for Render
 @app.route('/')
 def home():
     return "🤖 البوت يعمل بشكل صحيح! - VIP Mining Bot"
@@ -324,22 +325,49 @@ def home():
 def health_check():
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
-def start_bot():
-    """تشغيل البوت في خيط منفصل"""
-    while True:
-        try:
-            print("🚀 البوت يعمل مع نظام VIP...")
-            bot.polling(none_stop=True, interval=1, timeout=60)
-        except Exception as e:
-            print(f"❌ خطأ في البوت: {e}")
-            time.sleep(10)
+@app.route(f'/{BOT_TOKEN}', methods=['POST'])
+def webhook():
+    """استقبال التحديثات من Telegram"""
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return 'OK', 200
+    else:
+        return 'Forbidden', 403
+
+@app.route('/set_webhook')
+def set_webhook_route():
+    """تعيين webhook تلقائياً"""
+    try:
+        bot.remove_webhook()
+        time.sleep(1)
+        bot.set_webhook(url=WEBHOOK_URL)
+        return f"✅ تم تعيين Webhook: {WEBHOOK_URL}"
+    except Exception as e:
+        return f"❌ خطأ في تعيين Webhook: {e}"
+
+@app.route('/remove_webhook')
+def remove_webhook_route():
+    """إزالة webhook"""
+    try:
+        bot.remove_webhook()
+        return "✅ تم إزالة Webhook"
+    except Exception as e:
+        return f"❌ خطأ في إزالة Webhook: {e}"
 
 if __name__ == "__main__":
-    # تشغيل البوت في خيط منفصل
-    import threading
-    bot_thread = threading.Thread(target=start_bot, daemon=True)
-    bot_thread.start()
+    print("🚀 بدأ تشغيل البوت مع Webhook...")
     
-    # تشغيل خادم الويب للاستماع على المنفذ
+    # تعيين Webhook تلقائياً عند التشغيل
+    try:
+        bot.remove_webhook()
+        time.sleep(2)
+        bot.set_webhook(url=WEBHOOK_URL)
+        print(f"✅ Webhook مضبوط على: {WEBHOOK_URL}")
+    except Exception as e:
+        print(f"⚠️ تحذير في تعيين Webhook: {e}")
+    
+    # تشغيل الخادم
     print(f"🌐 بدأ تشغيل الخادم على المنفذ {PORT}")
     app.run(host='0.0.0.0', port=PORT, debug=False)
