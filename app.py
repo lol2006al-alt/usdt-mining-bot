@@ -949,7 +949,6 @@ def keep_alive():
         except Exception as e:
             print(f"🔄 إعادة تشغيل Keep-alive: {e}")
             time.sleep(10)
-
 # 🌐 إعداد ويب هوك للتشغيل على Render
 @app.route('/')
 def index():
@@ -967,19 +966,23 @@ def webhook():
 
 # 🚀 بدء التشغيل على Render
 if __name__ == "__main__":
-    print("🚀 بدأ تشغيل البوت على Render...")
+    print("🚀 بدأ تشغيل البوت على Render بنظام Webhook...")
     
     try:
         # إعداد ويب هوك
         bot.remove_webhook()
         time.sleep(2)
         
-        # استخدام البورت من متغيرات البيئة
-        PORT = int(os.environ.get('PORT', 10000))
+        # ✅ استخدام Webhook مع الرابط الصحيح
+        WEBHOOK_URL = 'https://usdt-bot-working.onrender.com/webhook'
+        bot.set_webhook(url=WEBHOOK_URL)
+        print(f"✅ Webhook مضبوط على: {WEBHOOK_URL}")
         
         # تشغيل الخادم
+        PORT = int(os.environ.get('PORT', 10000))
         print(f"🌐 بدأ تشغيل الخادم على المنفذ {PORT}")
         app.run(host='0.0.0.0', port=PORT, debug=False)
         
     except Exception as e:
         print(f"❌ خطأ في التشغيل: {e}")
+
