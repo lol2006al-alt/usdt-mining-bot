@@ -251,6 +251,47 @@ def create_games_menu():
     )
     return keyboard
 
+    def get_vip_details(level):
+    vip_data = {
+        "bronze": {
+            "name": "🟢 VIP برونزي",
+            "price": 5.0,
+            "mining_bonus": "+10% أرباح تعدين",
+            "daily_bonus": 0.5,
+            "features": [
+                "+10% أرباح تعدين",
+                "دعم سريع", 
+                "مهام إضافية",
+                "ألعاب حصرية"
+            ]
+        },
+        "silver": {
+            "name": "🔵 VIP فضى", 
+            "price": 10.0,
+            "mining_bonus": "+25% أرباح تعدين",
+            "daily_bonus": 1.0,
+            "features": [
+                "+25% أرباح تعدين",
+                "دعم مميز",
+                "مهام حصرية", 
+                "مكافآت يومية"
+            ]
+        },
+        "gold": {
+            "name": "🟡 VIP ذهبي",
+            "price": 20.0,
+            "mining_bonus": "+50% أرباح تعدين",
+            "daily_bonus": 2.0,
+            "features": [
+                "+50% أرباح تعدين",
+                "دعم فوري",
+                "مكافآت يومية",
+                "خصومات حصرية"
+            ]
+        }
+    }
+    return vip_data.get(level)
+
 def create_vip_keyboard():
     keyboard = InlineKeyboardMarkup(row_width=1)
     keyboard.add(InlineKeyboardButton("🟢 VIP برونزي - 5.0 USDT", callback_data="vip_bronze"))
