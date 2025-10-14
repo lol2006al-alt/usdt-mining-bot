@@ -1,94 +1,304 @@
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
-import threading
-import requests
-import logging
-
-# 🔧 إعداد التسجيل للأخطاء
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+import hashlib
+import json
 
 BOT_TOKEN = "8385331860:AAFTz51bMqPjtEBM50p_5WY_pbMytnqS0zc"
-SUPPORT_USER_ID = "8400225549"
-bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
+bot = telebot.TeleBot(BOT_TOKEN)
 
-# تخزين البيانات
+# أنظمة التخزين
 user_data = {}
-user_language = {}
-support_messages = {}
+deposit_requests = {}
+vip_users = {}
 
-# 🔄 إعدادات إعادة المحاولة
-MAX_RETRIES = 10
-RETRY_DELAY = 30
+# نظام VIP
+vip_system = {
+    "BRONZE": {
+        "name": "🟢 VIP برونزي",
+        "price": 5.0,
+        "bonus": 0.10,
+        "features": ["+10% أرباح تعدين", "دعم سريع", "مهام إضافية"],
+        "duration": 30,
+        "color": "🟢"
+    },
+    "SILVER": {
+        "name": "🔵 VIP فضى", 
+        "price": 10.0,
+        "bonus": 0.25,
+        "features": ["+25% أرباح تعدين", "دعم مميز", "مهام حصرية"],
+        "duration": 30,
+        "color": "🔵"
+    },
+    "GOLD": {
+        "name": "🟡 VIP ذهبي",
+        "price": 20.0, 
+        "bonus": 0.50,
+        "features": ["+50% أرباح تعدين", "دعم فوري", "مكافآت يومية"],
+        "duration": 30,
+        "color": "🟡"
+    }
+}
 
-def keep_alive():
-    """إرسال طلبات دورية للحفاظ على التشغيل"""
-    while True:
-        try:
-            # إرسال ping لمنع النوم
-            bot.get_me()
-            logging.info("✅ البوت نشط - ping successful")
-        except Exception as e:
-            logging.warning(f"⚠️ فشل ping: {e}")
+# عنوان محفظتك الرئيسي
+MAIN_WALLET = "0xfc712c9985507a2eb44df1ddfe7f09ff7613a19b"
+
+def init_user(user_id):
+    if str(user_id) not in user_data:
+        user_data[str(user_id)] = {
+            'balance': 0.0,
+            'mining_earnings': 0.0,
+            'referrals_count': 0,
+            'total_deposited': 0.0,
+            'vip_level': None,
+            'vip_expiry': None,
+            'deposit_codes': [],
+            'user_id': str(user_id)
+        }
+
+def generate_deposit_code(user_id, vip_type):
+    """إنشاء كود إيداع فريد"""
+    price = vip_system[vip_type]['price']
+    code = f"DEP{user_id}{int(time.time())}{random.randint(1000,9999)}"
+    
+    deposit_requests[code] = {
+        'user_id': user_id,
+        'vip_type': vip_type,
+        'amount': price,
+        'status': 'pending',
+        'created_at': datetime.now(),
+        'expires_at': datetime.now() + timedelta(hours=24)
+    }
+    
+    return code, price
+
+def verify_deposit_manual(code):
+    """التحقق اليدوي من الإيداع (ستقوم به أنت)"""
+    if code in deposit_requests:
+        request = deposit_requests[code]
+        if request['status'] == 'pending':
+            # هنا ستتحقق يدوياً من المحفظة
+            return True  # أو False حسب التحقق
+    return False
+
+def activate_vip(user_id, vip_type):
+    """تفعيل VIP للمستخدم"""
+    user_data[str(user_id)]['vip_level'] = vip_type
+    user_data[str(user_id)]['vip_expiry'] = datetime.now() + timedelta(days=30)
+    vip_users[str(user_id)] = {
+        'level': vip_type,
+        'activated_at': datetime.now(),
+        'expires_at': datetime.now() + timedelta(days=30)
+    }
+
+def vip_keyboard():
+    """لوحة VIP"""
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    
+    for vip_type, info in vip_system.items():
+        keyboard.add(
+            InlineKeyboardButton(
+                f"{info['name']} - {info['price']} USDT", 
+                callback_data=f"vip_{vip_type}"
+            )
+        )
+    
+    keyboard.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
+    return keyboard
+
+def get_vip_benefits(user_id):
+    """الحصول على مزايا VIP للمستخدم"""
+    if str(user_id) in vip_users:
+        vip_info = vip_users[str(user_id)]
+        if vip_info['expires_at'] > datetime.now():
+            return vip_system[vip_info['level']]['bonus']
+    return 0.0
+
+@bot.message_handler(commands=['vip'])
+def vip_command(message):
+    """عرض باقات VIP"""
+    user_id = message.from_user.id
+    init_user(user_id)
+    
+    vip_text = """🎖️ **نظام العضويات VIP**
+
+اختر الباقة المناسبة لك واستمتع بمزايا حصرية:
+
+"""
+    
+    for vip_type, info in vip_system.items():
+        vip_text += f"""
+{info['color']} **{info['name']}**
+💵 السعر: {info['price']} USDT
+📈 المكافأة: +{int(info['bonus']*100)}% أرباح تعدين
+⭐ المزايا:
+"""
+        for feature in info['features']:
+            vip_text += f"   • {feature}\n"
+    
+    vip_text += "\\n🎯 بعد الشراء، سيتم التحقق من الإيداع تلقائياً!"
+    
+    bot.send_message(user_id, vip_text, reply_markup=vip_keyboard())
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('vip_'))
+def handle_vip_selection(call):
+    """معالجة اختيار باقة VIP"""
+    user_id = call.from_user.id
+    vip_type = call.data.split('_')[1]
+    
+    if vip_type in vip_system:
+        vip_info = vip_system[vip_type]
         
-        # انتظر 5 دقائق بين كل ping
-        time.sleep(300)
+        # إنشاء كود إيداع
+        deposit_code, amount = generate_deposit_code(user_id, vip_type)
+        
+        deposit_text = f"""🎯 **طلب شراء {vip_info['name']}**
 
-def auto_mining():
-    """التعدين التلقائي في الخلفية"""
+💵 المبلغ المطلوب: {amount} USDT
+🆔 كود الإيداع: `{deposit_code}`
+
+💎 **عنوان المحفظة:**
+`{MAIN_WALLET}`
+
+📋 **خطوات الشراء:**
+1. أرسل {amount} USDT إلى العنوان أعلاه
+2. استخدم الشبكة: **BEP20**
+3. في وصف التحويل اكتب: **{deposit_code}**
+
+⏰ سيتم التحقق من الإيداع خلال 24 ساعة
+✅ بعد التحقق سيتم تفعيل VIP تلقائياً"""
+
+        keyboard = InlineKeyboardMarkup()
+        keyboard.add(InlineKeyboardButton("🔍 تحقق من الإيداع", callback_data=f"check_deposit_{deposit_code}"))
+        keyboard.add(InlineKeyboardButton("🔙 عودة للباقات", callback_data="vip_menu"))
+        
+        bot.edit_message_text(
+            deposit_text,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=keyboard
+        )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('check_deposit_'))
+def check_deposit_status(call):
+    """التحقق من حالة الإيداع"""
+    user_id = call.from_user.id
+    deposit_code = call.data.split('_')[2]
+    
+    if deposit_code in deposit_requests:
+        request = deposit_requests[deposit_code]
+        
+        if request['status'] == 'completed':
+            bot.answer_callback_query(call.id, "✅ تم تفعيل VIP بنجاح!", show_alert=True)
+            
+            # تحديث واجهة المستخدم
+            vip_info = vip_system[request['vip_type']]
+            success_text = f"""🎉 **تم تفعيل {vip_info['name']} بنجاح!**
+
+⭐ الآن يمكنك الاستمتاع بالمزايا:
+"""
+            for feature in vip_info['features']:
+                success_text += f"• {feature}\n"
+            
+            success_text += f"\n⏰ تنتهي العضوية: {request['created_at'] + timedelta(days=30):%Y-%m-%d}"
+            
+            bot.edit_message_text(
+                success_text,
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                reply_markup=InlineKeyboardMarkup().add(
+                    InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu")
+                )
+            )
+            
+        else:
+            bot.answer_callback_query(
+                call.id, 
+                "⏳ جاري التحقق من الإيداع...\nسيتم التفويح تلقائياً عند اكتماله", 
+                show_alert=True
+            )
+    else:
+        bot.answer_callback_query(call.id, "❌ كود الإيداع غير صحيح", show_alert=True)
+
+# 🔧 أوامر التحكم للمسؤول (أنت)
+@bot.message_handler(commands=['verify_deposit'])
+def verify_deposit_admin(message):
+    """أمر للمسؤول للتحقق من الإيداع"""
+    user_id = message.from_user.id
+    
+    # تحقق إذا كان المستخدم هو المسؤول
+    if str(user_id) != SUPPORT_USER_ID:
+        bot.send_message(user_id, "❌ ليس لديك صلاحية لهذا الأمر")
+        return
+    
+    parts = message.text.split()
+    if len(parts) < 2:
+        bot.send_message(user_id, "⚙️ استخدام: /verify_deposit [كود_الإيداع]")
+        return
+    
+    deposit_code = parts[1]
+    
+    if deposit_code in deposit_requests:
+        request = deposit_requests[deposit_code]
+        
+        if request['status'] == 'pending':
+            # تفعيل VIP
+            activate_vip(request['user_id'], request['vip_type'])
+            deposit_requests[deposit_code]['status'] = 'completed'
+            
+            # إشعار المستخدم
+            try:
+                vip_info = vip_system[request['vip_type']]
+                bot.send_message(
+                    request['user_id'],
+                    f"🎉 **تم تفعيل {vip_info['name']} بنجاح!**\n\n"
+                    f"شكراً لثقتك! يمكنك الآن الاستمتاع بجميع مزايا العضوية."
+                )
+            except:
+                pass
+            
+            bot.send_message(user_id, f"✅ تم تفعيل VIP للمستخدم {request['user_id']}")
+        else:
+            bot.send_message(user_id, "⚠️ هذا الإيداع تم التحقق منه مسبقاً")
+    else:
+        bot.send_message(user_id, "❌ كود الإيداع غير موجود")
+
+@bot.message_handler(commands=['pending_deposits'])
+def pending_deposits_admin(message):
+    """عرض الإيداعات المنتظرة التحقق"""
+    user_id = message.from_user.id
+    
+    if str(user_id) != SUPPORT_USER_ID:
+        return
+    
+    pending = []
+    for code, request in deposit_requests.items():
+        if request['status'] == 'pending':
+            pending.append(f"كود: {code} | مستخدم: {request['user_id']} | مبلغ: {request['amount']} USDT")
+    
+    if pending:
+        bot.send_message(user_id, "📋 الإيداعات المنتظرة:\n" + "\n".join(pending))
+    else:
+        bot.send_message(user_id, "✅ لا توجد إيداعات منتظرة")
+
+# دمج نظام VIP مع التعدين
+def calculate_mining_earnings(user_id, base_earnings):
+    """حساب الأرباح مع مكافآت VIP"""
+    vip_bonus = get_vip_benefits(user_id)
+    return base_earnings * (1 + vip_bonus)
+
+# ... (بقية الكود الأساسي للبوت) ...
+
+def start_bot():
     while True:
         try:
-            current_time = datetime.now()
-            for user_id, data in user_data.items():
-                time_diff = (current_time - data.get('last_update', current_time)).total_seconds()
-                if time_diff >= 60:
-                    if data['mining_progress'] < data['max_mining']:
-                        data['mining_progress'] += 0.01
-                        if data['mining_progress'] > data['max_mining']:
-                            data['mining_progress'] = data['max_mining']
-                        data['last_update'] = current_time
-            
-            time.sleep(60)
+            print("🚀 البوت يعمل مع نظام VIP...")
+            bot.polling(none_stop=True)
         except Exception as e:
-            logging.error(f"❌ خطأ في التعدين: {e}")
-            time.sleep(30)
-
-def start_bot_with_retry():
-    """تشغيل البوت مع إعادة محاولة ذكية"""
-    retries = 0
-    while retries < MAX_RETRIES:
-        try:
-            logging.info(f"🔄 محاولة تشغيل البوت ({retries + 1}/{MAX_RETRIES})")
-            
-            # فحص اتصال البوت
-            bot_info = bot.get_me()
-            logging.info(f"✅ البوت يعمل: @{bot_info.username}")
-            
-            # بدء الخدمات الخلفية
-            threading.Thread(target=keep_alive, daemon=True).start()
-            threading.Thread(target=auto_mining, daemon=True).start()
-            
-            # بدء الاستماع للرسائل
-            bot.polling(none_stop=True, timeout=60, long_polling_timeout=60)
-            
-        except Exception as e:
-            retries += 1
-            logging.error(f"❌ فشل التشغيل ({retries}/{MAX_RETRIES}): {e}")
-            
-            if retries < MAX_RETRIES:
-                logging.info(f"⏳ انتظار {RETRY_DELAY} ثانية للمحاولة التالية...")
-                time.sleep(RETRY_DELAY)
-            else:
-                logging.error("❌ تم تجاوز الحد الأقصى للمحاولات")
-                break
-
-# ... (بقية الكود كما هو مع إضافة logging في جميع الدوال) ...
+            print(f"❌ خطأ: {e}")
+            time.sleep(10)
 
 if __name__ == "__main__":
-    logging.info("🚀 بدء تشغيل البوت مع نظام 24/7...")
-    start_bot_with_retry()
+    start_bot()
