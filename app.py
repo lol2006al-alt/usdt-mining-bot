@@ -976,19 +976,35 @@ def webhook():
     else:
         return 'Forbidden', 403
 
+# 🌐 إعداد ويب هوك للتشغيل على Render
+@app.route('/')
+def index():
+    return "🤖 البوت يعمل بشكل صحيح! استخدم /start في التلجرام"
+
+@app.route(f'/{BOT_TOKEN}', methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return 'OK', 200
+    else:
+        return 'Forbidden', 403
+
 # 🚀 بدء التشغيل على Render
 if __name__ == "__main__":
-    print("🚀 بدأ تشغيل البوت على Render بنظام Webhook...")
+    print("🚀 بدأ تشغيل البوت على Render...")
     
     try:
         # إعداد ويب هوك
         bot.remove_webhook()
-        time.sleep(2)
+        time.sleep(3)
         
-        # ✅ استخدام Webhook مع الرابط الصحيح
+        # استخدام Webhook مع الرابط الصحيح
         WEBHOOK_URL = f'https://usdt-bot-working.onrender.com/{BOT_TOKEN}'
         bot.set_webhook(url=WEBHOOK_URL)
         print(f"✅ Webhook مضبوط على: {WEBHOOK_URL}")
+        print(f"🔗 Test URL: https://api.telegram.org/bot{BOT_TOKEN}/getWebhookInfo")
         
         # تشغيل الخادم
         PORT = int(os.environ.get('PORT', 10000))
@@ -997,3 +1013,6 @@ if __name__ == "__main__":
         
     except Exception as e:
         print(f"❌ خطأ في التشغيل: {e}")
+        # بديل Polling للطوارئ
+        print("🔄 جرب تشغيل Polling كبديل...")
+        bot.infinity_polling()
