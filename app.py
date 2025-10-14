@@ -517,6 +517,7 @@ def handle_callbacks(call):
             parse_mode='Markdown'
         )
 
+    # 🔧 قسم VIP المصحح - بداية الإصلاح
     elif call.data == "vip_packages":
         try:
             vip_text = """🎖️ *نظام العضويات VIP - ترقى لمستوى أفضل* 🎖️
@@ -645,6 +646,7 @@ def handle_callbacks(call):
         )
         
         bot.answer_callback_query(call.id, f"✅ تم تفعيل {vip_info['name']} بنجاح!")
+    # 🔧 قسم VIP المصحح - نهاية الإصلاح
     
     elif call.data == "withdraw":
         if user['balance'] < 100.0:
