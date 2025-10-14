@@ -3,8 +3,6 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import random
 from datetime import datetime, timedelta
 import time
-import hashlib
-import json
 import os
 from flask import Flask, request
 
@@ -14,7 +12,7 @@ PORT = int(os.environ.get('PORT', 10000))
 
 # 🔧 إعدادات البوت
 BOT_TOKEN = "8385331860:AAFTz51bMqPjtEBM50p_5WY_pbMytnqS0zc"
-SUPPORT_USER_ID = "YOUR_USER_ID_HERE"  # 8400225549
+SUPPORT_USER_ID = "8400225549"  # ✅ تم وضع ID حسابك
 
 bot = telebot.TeleBot(BOT_TOKEN)
 WEBHOOK_URL = f"https://usdt-mining-bot-wmvf.onrender.com/{BOT_TOKEN}"
@@ -83,14 +81,6 @@ def generate_deposit_code(user_id, vip_type):
     }
     
     return code, price
-
-def verify_deposit_manual(code):
-    """التحقق اليدوي من الإيداع (ستقوم به أنت)"""
-    if code in deposit_requests:
-        request = deposit_requests[code]
-        if request['status'] == 'pending':
-            return True
-    return False
 
 def activate_vip(user_id, vip_type):
     """تفعيل VIP للمستخدم"""
@@ -261,7 +251,6 @@ def verify_deposit_admin(message):
     """أمر للمسؤول للتحقق من الإيداع"""
     user_id = message.from_user.id
     
-    # ⚠️ غير قيمة SUPPORT_USER_ID إلى ID حسابك
     if str(user_id) != SUPPORT_USER_ID:
         bot.send_message(user_id, "❌ ليس لديك صلاحية لهذا الأمر")
         return
