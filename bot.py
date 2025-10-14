@@ -184,7 +184,7 @@ def keep_alive():
             print(f"🔄 pinged at {datetime.now()}")
         except Exception as e:
             print(f"❌ ping failed: {e}")
-        time.sleep(240)
+        time.sleep(120)
 
 # 🎮 نظام الألعاب
 GAMES_SYSTEM = {
