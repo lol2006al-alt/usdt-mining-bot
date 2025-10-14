@@ -474,7 +474,8 @@ def handle_callbacks(call):
             text=result_text,
             reply_markup=create_main_menu(),
             parse_mode='Markdown'
-       elif call.data == "vip_packages":
+        
+            elif call.data == "vip_packages":
         try:
             vip_text = """🎖️ *نظام العضويات VIP - ترقى لمستوى أفضل* 🎖️
 
@@ -563,11 +564,17 @@ def handle_callbacks(call):
         vip_info = get_vip_details(vip_type)
         
         if not vip_info:
+            bot.answer_callback_query(call.id, "❌ نوع VIP غير صحيح")
             return
         
+        # خصم السعر من الرصيد
         user['balance'] -= vip_info['price']
+        
+        # تعيين مستوى VIP
         vip_levels = {"bronze": 1, "silver": 2, "gold": 3}
         user['vip_level'] = vip_levels.get(vip_type, 1)
+        
+        # تعيين تاريخ انتهاء VIP (30 يوم)
         user['vip_expiry'] = (datetime.now() + timedelta(days=30)).isoformat()
         user['last_daily_bonus'] = datetime.now().isoformat()
         
