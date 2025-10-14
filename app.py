@@ -10,10 +10,7 @@ import random
 
 # تكوين الأساسيات
 BOT_TOKEN = "8385331860:AAFTz51bMqPjtEBM50p_5WY_pbMytnqS0zc"
-WEBHOOK_URL = os.environ.get('WEBHOOK_URL', 'https://your-app.onrender.com') + '/' + BOT_TOKEN
-PORT = int(os.environ.get('PORT', 10000))
-
-bot = telebot.TeleBot(BOT_TOKEN)
+bot = telebot.TeleBot(BOT_TOKEN, threaded=True, num_threads=10)
 app = Flask(__name__)
 
 # 🔐 إعدادات المشرفين - أنت المسؤول الوحيد
@@ -23,6 +20,12 @@ ADMIN_IDS = [8400225549]  # ✅ أنت المشرف الرئيسي!
 def init_db():
     conn = sqlite3.connect('bot_database.db', check_same_thread=False)
     cursor = conn.cursor()
+    
+    # إعدادات الأداء
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.execute("PRAGMA cache_size=10000")
+    cursor.execute("PRAGMA temp_store=MEMORY")
     
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
@@ -38,7 +41,7 @@ def init_db():
             games_played_today INTEGER DEFAULT 0,
             total_games_played INTEGER DEFAULT 0,
             total_earned REAL DEFAULT 0.0,
-            total_deposits REAL DEFAULT 0.0,  -- إجمالي الإيداعات
+            total_deposits REAL DEFAULT 0.0,
             games_counter INTEGER DEFAULT 0,
             last_daily_bonus TIMESTAMP,
             registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -113,7 +116,7 @@ def get_user(user_id):
             'games_played_today': user[9],
             'total_games_played': user[10],
             'total_earned': user[11],
-            'total_deposits': user[12],  # إجمالي الإيداعات
+            'total_deposits': user[12],
             'games_counter': user[13],
             'last_daily_bonus': user[14],
             'registration_date': user[15]
@@ -141,7 +144,7 @@ def save_user(user_data):
         user_data.get('games_played_today', 0),
         user_data.get('total_games_played', 0),
         user_data.get('total_earned', 0.0),
-        user_data.get('total_deposits', 0.0),  # حفظ إجمالي الإيداعات
+        user_data.get('total_deposits', 0.0),
         user_data.get('games_counter', 0),
         user_data.get('last_daily_bonus')
     ))
@@ -153,13 +156,11 @@ def add_balance(user_id, amount, description="", is_deposit=False):
         user['balance'] += amount
         user['total_earned'] += amount
         
-        # إذا كان إيداعاً، نزيد إجمالي الإيداعات
         if is_deposit:
             user['total_deposits'] += amount
         
         save_user(user)
         
-        # تسجيل المعاملة
         cursor = db_connection.cursor()
         transaction_type = 'deposit' if is_deposit else 'bonus'
         cursor.execute(
@@ -167,7 +168,6 @@ def add_balance(user_id, amount, description="", is_deposit=False):
             (user_id, transaction_type, amount, description)
         )
         
-        # إذا كان إيداعاً، نسجله في جدول الإيداعات
         if is_deposit:
             cursor.execute(
                 "INSERT INTO deposits (user_id, amount) VALUES (?, ?)",
@@ -188,7 +188,6 @@ def add_referral(referrer_id, referred_id):
     cursor.execute("UPDATE users SET referrals_count = referrals_count + 1 WHERE user_id = ?", 
                   (referrer_id,))
     
-    # ✅ إضافة محاولة لعب إضافية للمستخدم
     cursor.execute("UPDATE users SET games_played_today = games_played_today - 1 WHERE user_id = ?", 
                   (referrer_id,))
     
@@ -254,8 +253,8 @@ def create_withdraw_keyboard():
 
 def create_referral_keyboard(user_id):
     keyboard = InlineKeyboardMarkup()
-    bot_username = (bot.get_me()).username
-    referral_link = f"https://t.me/{bot_username}?start={user_id}"
+    # ✅ إصلاح رابط الإحالة باستخدام يوزر البوت الصحيح
+    referral_link = f"https://t.me/BNBMini1Bot?start={user_id}"
     
     keyboard.add(InlineKeyboardButton("📤 مشاركة الرابط", 
                 url=f"https://t.me/share/url?url={referral_link}&text=انضم إلى هذا البوت الرائع واحصل على 1.0 USDT مجاناً! 🎮"))
@@ -329,7 +328,7 @@ def start_command(message):
             'referrer_id': referrer_id,
             'balance': 0.0 + referral_bonus,
             'games_played_today': 3,
-            'total_deposits': 0.0  # بداية إجمالي الإيداعات بصفر
+            'total_deposits': 0.0
         }
         save_user(new_user)
         user = new_user
@@ -464,33 +463,26 @@ def handle_callbacks(call):
         💵 السعر: 5.0 USDT
         📈 المكافأة: +10% أرباح تعدين
         🎁 المكافأة اليومية: 0.5 USDT
-        ⭐ المزايا:
-           • +10% أرباح تعدين
-           • دعم سريع
-           • مهام إضافية
-           • ألعاب حصرية
 
         🔵 **🔵 VIP فضى**
-        💵 السعر: 10.0 USDT
+        💵 السعر: 10.0 USDT  
         📈 المكافأة: +25% أرباح تعدين
         🎁 المكافأة اليومية: 1.0 USDT
-        ⭐ المزايا:
-           • +25% أرباح تعدين
-           • دعم مميز
-           • مهام حصرية
-           • مكافآت يومية
 
         🟡 **🟡 VIP ذهبي**
         💵 السعر: 20.0 USDT
-        📈 المكافأة: +50% أرباح تعدين
+        📈 المكافأة: +50% أرباح تعدين  
         🎁 المكافأة اليومية: 2.0 USDT
-        ⭐ المزايا:
-           • +50% أرباح تعدين
-           • دعم فوري
-           • مكافآت يومية
-           • خصومات حصرية
 
-        🚀 **بعد الشراء، سيتم التحقق من الإيداع تلقائياً!**
+        💎 **للشراء، أرسل USDT إلى عنوان المحفظة التالي على شبكة BEP20:**
+        `0xfc712c9985507a2eb44df1ddfe7f09ff7613a19b`
+
+        📝 **بعد الإيداع:**
+        1. أرسل screenshot للتحويل إلى @Trust_wallet_Support_3
+        2. اذكر نوع الباقة المطلوبة
+        3. انتظر التفعيل خلال 24 ساعة
+
+        ⚠️ **تأكد من استخدام شبكة BEP20 فقط!**
         """
         bot.edit_message_text(
             chat_id=call.message.chat.id,
@@ -582,7 +574,6 @@ def handle_callbacks(call):
         bot.answer_callback_query(call.id, f"✅ تم تفعيل {vip_info['name']} بنجاح!")
     
     elif call.data == "withdraw":
-        # ✅ الشروط الجديدة للسحب
         if user['balance'] < 100.0:
             bot.answer_callback_query(
                 call.id, 
@@ -590,7 +581,6 @@ def handle_callbacks(call):
             )
             return
         
-        # ✅ شرط الإيداع الجديد: يجب أن يكون قد أودع 10 USDT على الأقل
         if user['total_deposits'] < 10.0:
             bot.answer_callback_query(
                 call.id,
@@ -615,7 +605,7 @@ def handle_callbacks(call):
         • الأموال المرسلة على الشبكات الخاطئة **ستضيع ولا يمكن استرجاعها**
 
         💎 **عنوان المحفظة (BEP20 فقط):**
-        `0x742d35Cc6634C0532925a3b8D3a4B2b6a5a6c8e3`
+        `0xfc712c9985507a2eb44df1ddfe7f09ff7613a19b`
 
         📝 **للسحب يرجى إرسال:**
         1. المبلغ المطلوب (100 USDT minimum)
@@ -809,7 +799,6 @@ def add_balance_admin(message):
         target_user_id = int(parts[1])
         amount = float(parts[2])
         
-        # ✅ استخدام is_deposit=True لتسجيلها كإيداع
         add_balance(target_user_id, amount, f"إضافة إدارية بواسطة {message.from_user.id}", is_deposit=True)
         
         target_user = get_user(target_user_id)
@@ -820,7 +809,6 @@ def add_balance_admin(message):
             f"💳 إجمالي الإيداعات: {target_user['total_deposits']} USDT"
         )
         
-        # إشعار للمستخدم
         try:
             bot.send_message(
                 target_user_id,
@@ -928,7 +916,7 @@ def show_admins(message):
         parse_mode='Markdown'
     )
 
-# 🌐 نظام الصحة والويب هوك
+# 🌐 نظام الصحة
 @app.route('/health')
 def health_check():
     try:
@@ -945,98 +933,45 @@ def health_check():
             "total_users": total_users,
             "total_referrals": total_referrals,
             "version": "6.0",
-            "performance": "excellent",
-            "withdraw_condition": "10 USDT minimum deposit required"
+            "performance": "excellent"
         }
     except Exception as e:
         return {"status": "error", "error": str(e)}, 500
 
-@app.route(f'/{BOT_TOKEN}', methods=['POST'])
-def webhook():
-    if request.headers.get('content-type') == 'application/json':
-        json_string = request.get_data().decode('utf-8')
-        update = telebot.types.Update.de_json(json_string)
-        bot.process_new_updates([update])
-        return 'OK', 200
-    else:
-        return 'Forbidden', 403
-
-# 🔧 نظام الصيانة
-def daily_maintenance():
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute("UPDATE users SET games_played_today = 0")
-        db_connection.commit()
-        print("✅ Daily maintenance completed at", datetime.now())
-    except Exception as e:
-        print(f"❌ Maintenance error: {e}")
-
-# 🚀 إبقاء البوت نشطاً
+# 🔧 نظام Keep-alive محسن
 def keep_alive():
     while True:
         try:
             cursor = db_connection.cursor()
             cursor.execute("SELECT 1")
-            time.sleep(300)
+            print(f"✅ البوت نشط - {datetime.now()}")
+            time.sleep(60)
         except Exception as e:
-            print(f"❌ Keep-alive error: {e}")
+            print(f"🔄 إعادة تشغيل Keep-alive: {e}")
+            time.sleep(10)
 
-# 🚀 بدء التشغيل
+# 🚀 بدء التشغيل بنظام السرعة الفائقة
 if __name__ == "__main__":
-    print("🚀 بدأ تشغيل البوت المحدث مع شرط السحب الجديد...")
+    print("🚀 بدأ تشغيل البوت بنظام السرعة الفائقة...")
     
-    # تحسين إعدادات SQLite
-    cursor = db_connection.cursor()
-    cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.execute("PRAGMA synchronous=NORMAL")
-    cursor.execute("PRAGMA cache_size=10000")
-    
+    # تشغيل نظام Keep-alive في الخلفية
     keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
     keep_alive_thread.start()
     
-    def schedule_maintenance():
-        while True:
-            now = datetime.now()
-            if now.hour == 0 and now.minute == 0:
-                daily_maintenance()
-            time.sleep(60)
-    
-    maintenance_thread = threading.Thread(target=schedule_maintenance, daemon=True)
-    maintenance_thread.start()
-    
     try:
-        bot.remove_webhook()
-        time.sleep(2)
-        bot.set_webhook(url=WEBHOOK_URL)
-        print(f"✅ Webhook مضبوط على: {WEBHOOK_URL}")
-    except Exception as e:
-        print(f"⚠️ تحذير في تعيين Webhook: {e}")
-    
-    print(f"🌐 بدأ تشغيل الخادم على المنفذ {PORT}")
-    print("✅ الميزات المحدثة:")
-    print("   - 💰 شرط سحب جديد: إيداع 10 USDT كحد أدنى")
-    print("   - 👑 أنت المسؤول الرئيسي (آيدي: 8400225549)")
-    print("   - 🎮 5 ألعاب بربح 5 USDT كل 3 محاولات")
-    print("   - 💎 3 مستويات VIP بمزايا حصرية")
-    print("   - 🛡️ تنبيهات أمان BEP20")
-    
-    # 🚀 بدء التشغيل - إصدار Polling
-if __name__ == "__main__":
-    print("🚀 بدأ تشغيل البوت المحدث بنظام Polling...")
-    
-    try:
-        print("🔧 جاري إزالة Webhook السابق...")
+        # إزالة أي Webhook سابق
         bot.remove_webhook()
         time.sleep(2)
         
-        print("🔄 بدء نظام Polling...")
-        print("✅ البوت جاهز لاستقبال الرسائل!")
-        
-        # بدء Polling بدلاً من Webhook
-        bot.infinity_polling()
+        # بدء التشغيل بنظام Polling السريع
+        print("🔄 بدء نظام Polling السريع...")
+        bot.infinity_polling(
+            timeout=20,
+            long_polling_timeout=10,
+            skip_pending=True
+        )
         
     except Exception as e:
         print(f"❌ خطأ في التشغيل: {e}")
-        # تشغيل الخادم كبديل
-        from waitress import serve
-        serve(app, host='0.0.0.0', port=PORT)
+        print("🔄 إعادة التشغيل خلال 10 ثواني...")
+        time.sleep(10)
