@@ -251,7 +251,7 @@ def create_games_menu():
     )
     return keyboard
 
-    def get_vip_details(level):
+def get_vip_details(level):
     vip_data = {
         "bronze": {
             "name": "🟢 VIP برونزي",
@@ -515,8 +515,9 @@ def handle_callbacks(call):
             text=result_text,
             reply_markup=create_main_menu(),
             parse_mode='Markdown'
-        
-            elif call.data == "vip_packages":
+        )
+
+    elif call.data == "vip_packages":
         try:
             vip_text = """🎖️ *نظام العضويات VIP - ترقى لمستوى أفضل* 🎖️
 
@@ -810,50 +811,6 @@ def get_game_name(game_type):
         "darts": "🎯 السهام"
     }
     return names.get(game_type, "لعبة")
-
-def get_vip_details(level):
-    vip_data = {
-        "bronze": {
-            "name": "🟢 VIP برونزي",
-            "price": 5.0,
-            "bonus_percent": 10,
-            "daily_bonus": 0.5,
-            "mining_bonus": "+10% أرباح تعدين",
-            "features": [
-                "+10% أرباح تعدين",
-                "دعم سريع", 
-                "مهام إضافية",
-                "ألعاب حصرية"
-            ]
-        },
-        "silver": {
-            "name": "🔵 VIP فضى", 
-            "price": 10.0,
-            "bonus_percent": 25,
-            "daily_bonus": 1.0,
-            "mining_bonus": "+25% أرباح تعدين",
-            "features": [
-                "+25% أرباح تعدين",
-                "دعم مميز",
-                "مهام حصرية", 
-                "مكافآت يومية"
-            ]
-        },
-        "gold": {
-            "name": "🟡 VIP ذهبي",
-            "price": 20.0,
-            "bonus_percent": 50, 
-            "daily_bonus": 2.0,
-            "mining_bonus": "+50% أرباح تعدين",
-            "features": [
-                "+50% أرباح تعدين",
-                "دعم فوري",
-                "مكافآت يومية",
-                "خصومات حصرية"
-            ]
-        }
-    }
-    return vip_data.get(level)
 
 # 👑 أوامر المشرفين
 @bot.message_handler(commands=['addbalance'])
