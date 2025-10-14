@@ -986,7 +986,7 @@ if __name__ == "__main__":
         time.sleep(2)
         
         # ✅ استخدام Webhook مع الرابط الصحيح
-        WEBHOOK_URL = 'https://usdt-bot-working.onrender.com/' + BOT_TOKEN
+        WEBHOOK_URL = f'https://usdt-bot-working.onrender.com/{BOT_TOKEN}'
         bot.set_webhook(url=WEBHOOK_URL)
         print(f"✅ Webhook مضبوط على: {WEBHOOK_URL}")
         
