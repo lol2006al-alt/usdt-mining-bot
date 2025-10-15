@@ -230,9 +230,9 @@ def create_main_menu():
         InlineKeyboardButton("💰 سحب رصيد", callback_data="withdraw")
     )
     keyboard.add(
-        InlineKeyboardButton("💎 باقات VIP", callback_data="vip_packages"),
-        InlineKeyboardButton("🆘 الدعم الفني", url="https://t.me/Trust_wallet_Support_3")
-    )
+    InlineKeyboardButton("🆘 الدعم الفني", url="https://t.me/Trust_wallet_Support_3"),  # ✅ انتقل هنا
+    InlineKeyboardButton("💎 باقات VIP", callback_data="vip_packages")  # ✅ انتقل هنا
+)
     return keyboard
 
 def create_games_menu():
