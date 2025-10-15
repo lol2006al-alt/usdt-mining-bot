@@ -781,7 +781,7 @@ def get_game_name(game_type):
     }
     return names.get(game_type, "لعبة")
 
-# 👑 أوامر المشرفين
+# 👑 أوامر المشرفين - الإصدار المحسن
 @bot.message_handler(commands=['addbalance'])
 def add_balance_admin(message):
     if message.from_user.id not in ADMIN_IDS:
@@ -797,8 +797,15 @@ def add_balance_admin(message):
         target_user_id = int(parts[1])
         amount = float(parts[2])
         
+        # التحقق من وجود المستخدم
+        target_user = get_user(target_user_id)
+        if not target_user:
+            bot.send_message(message.chat.id, f"❌ المستخدم {target_user_id} غير موجود!")
+            return
+        
         add_balance(target_user_id, amount, f"إضافة إدارية بواسطة {message.from_user.id}", is_deposit=True)
         
+        # الحصول على بيانات المستخدم المحدثة
         target_user = get_user(target_user_id)
         bot.send_message(
             message.chat.id, 
@@ -807,6 +814,7 @@ def add_balance_admin(message):
             f"💳 إجمالي الإيداعات: {target_user['total_deposits']:.1f} USDT"
         )
         
+        # إرسال إشعار للمستخدم
         try:
             bot.send_message(
                 target_user_id,
@@ -913,6 +921,115 @@ def show_admins(message):
         f"📊 **عدد المشرفين:** {len(ADMIN_IDS)}",
         parse_mode='Markdown'
     )
+
+# 🆕 الأوامر الجديدة المطلوبة
+@bot.message_handler(commands=['debug'])
+def debug_bot(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    try:
+        # التحقق من اتصال البوت
+        bot_info = bot.get_me()
+        
+        # التحقق من قاعدة البيانات
+        db_status = "✅ متصلة" if db_connection else "❌ غير متصلة"
+        
+        debug_text = f"""
+🐛 **معلومات التصحيح:**
+
+🤖 البوت: {bot_info.first_name} (@{bot_info.username})
+🗃️ قاعدة البيانات: {db_status}
+🆔 آيديك: {message.from_user.id}
+📊 الإصدار: 7.0
+"""
+        bot.send_message(message.chat.id, debug_text)
+        
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ خطأ في التصحيح: {e}")
+
+@bot.message_handler(commands=['checkdb'])
+def check_database(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    try:
+        cursor = db_connection.cursor()
+        
+        # التحقق من اتصال قاعدة البيانات
+        cursor.execute("SELECT COUNT(*) FROM users")
+        user_count = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = cursor.fetchall()
+        
+        status_text = f"""
+📊 **حالة قاعدة البيانات:**
+
+✅ متصلة: نعم
+👥 عدد المستخدمين: {user_count}
+🗃️ الجداول: {', '.join([table[0] for table in tables])}
+"""
+        bot.send_message(message.chat.id, status_text)
+        
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ خطأ في قاعدة البيانات: {e}")
+
+@bot.message_handler(commands=['createaccount'])
+def create_account(message):
+    try:
+        user_id = message.from_user.id
+        
+        # إنشاء المستخدم مباشرة
+        cursor = db_connection.cursor()
+        cursor.execute('''
+            INSERT OR REPLACE INTO users 
+            (user_id, username, first_name, last_name, balance, games_played_today)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (
+            user_id,
+            message.from_user.username,
+            message.from_user.first_name,
+            message.from_user.last_name or '',
+            0.0,  # رصيد ابتدائي
+            3     # محاولات لعب
+        ))
+        
+        db_connection.commit()
+        
+        bot.send_message(
+            message.chat.id,
+            f"✅ **تم إنشاء حسابك بنجاح!**\n\n"
+            f"🆔 الآيدي: `{user_id}`\n"
+            f"👤 الاسم: {message.from_user.first_name}\n"
+            f"💰 الرصيد: 0.0 USDT\n"
+            f"🎯 المحاولات: 3\n\n"
+            f"يمكنك الآن استخدام `/addbalance {user_id} 20.0`",
+            parse_mode='Markdown'
+        )
+        
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ خطأ في إنشاء الحساب: {e}")
+
+@bot.message_handler(commands=['allusers'])
+def all_users_admin(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    cursor = db_connection.cursor()
+    cursor.execute("SELECT user_id, first_name, username, balance FROM users LIMIT 50")
+    users = cursor.fetchall()
+    
+    if users:
+        users_text = "📊 **آخر 50 مستخدم:**\n\n"
+        for user in users:
+            user_id, first_name, username, balance = user
+            user_link = f"@{username}" if username else first_name
+            users_text += f"🆔 `{user_id}` - {user_link} - 💰 {balance} USDT\n"
+    else:
+        users_text = "❌ لا يوجد مستخدمين!"
+    
+    bot.send_message(message.chat.id, users_text, parse_mode='Markdown')
 
 # 🌐 نظام الصحة
 @app.route('/health')
