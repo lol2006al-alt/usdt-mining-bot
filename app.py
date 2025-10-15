@@ -797,22 +797,27 @@ def add_balance_admin(message):
         target_user_id = int(parts[1])
         amount = float(parts[2])
         
-        # التحقق من وجود المستخدم
-        target_user = get_user(target_user_id)
-        if not target_user:
-            bot.send_message(message.chat.id, f"❌ المستخدم {target_user_id} غير موجود!")
-            return
+        # 🚀 بدء التشغيل بنظام Polling للتأكد من العمل
+if __name__ == "__main__":
+    print("🚀 بدأ تشغيل البوت بنظام Polling...")
+    
+    try:
+        # تنظيف أي Webhook قديم أولاً
+        bot.remove_webhook()
+        time.sleep(3)
         
-        add_balance(target_user_id, amount, f"إضافة إدارية بواسطة {message.from_user.id}", is_deposit=True)
+        print("✅ البوت يعمل! جرب الأوامر الآن:")
+        print("   /debug - فحص النظام")
+        print("   /myid - معرفة الآيدي") 
+        print("   /addbalance [آيدي] [مبلغ] - إضافة رصيد")
         
-        # الحصول على بيانات المستخدم المحدثة
-        target_user = get_user(target_user_id)
-        bot.send_message(
-            message.chat.id, 
-            f"✅ تم إضافة {amount} USDT للمستخدم {target_user_id}\n"
-            f"💰 الرصيد الجديد: {target_user['balance']:.1f} USDT\n"
-            f"💳 إجمالي الإيداعات: {target_user['total_deposits']:.1f} USDT"
-        )
+        # استخدام Polling بدلاً من Webhook
+        bot.infinity_polling(timeout=60, long_polling_timeout=60, restart_on_change=True)
+        
+    except Exception as e:
+        print(f"❌ خطأ في التشغيل: {e}")
+        print("🔄 إعادة المحاولة خلال 10 ثواني...")
+        time.sleep(10)
         
         # إرسال إشعار للمستخدم
         try:
