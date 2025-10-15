@@ -9,7 +9,7 @@ import os
 import random
 
 # تكوين الأساسيات
-BOT_TOKEN = "8385331860:AAFTz51bMqPjtEBM50p_5WY_pbMytnqS0zc"
+BOT_TOKEN = "8385331860:AAEcFqGY4vXORINuGUHGXpmSN9-Ft1uEMj8"
 bot = telebot.TeleBot(BOT_TOKEN, threaded=True, num_threads=10)
 app = Flask(__name__)
 
