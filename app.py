@@ -4,9 +4,10 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import os
 import json
 from datetime import datetime
+import random
 
 # التوكن من Environment Variable
-BOT_TOKEN = os.environ.get('BOT_TOKEN', "8385331860:AAEcFqGY4vXORINuGUH6XpmSN9-FtluEMj8")
+BOT_TOKEN = os.environ.get('BOT_TOKEN', "8385331860:AAHj0uPnpJf_JYtHjALIkmavsBNnpa_Gd2Y")
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
@@ -16,6 +17,97 @@ ADMIN_IDS = [8400225549]
 # تخزين المستخدمين في الذاكرة (مؤقت)
 users_db = {}
 backups_db = []
+
+# 🎯 كل الأزرار والوظائف كما في الأصل
+def create_main_menu():
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        InlineKeyboardButton("🎮 الألعاب (3 محاولات)", callback_data="games_menu"),
+        InlineKeyboardButton("📊 الملف الشخصي", callback_data="profile")
+    )
+    keyboard.add(
+        InlineKeyboardButton("👥 الإحالات (+1 محاولة)", callback_data="referral"),
+        InlineKeyboardButton("💰 سحب رصيد", callback_data="withdraw")
+    )
+    keyboard.add(
+        InlineKeyboardButton("🆘 الدعم الفني", url="https://t.me/Trust_wallet_Support_3"),
+        InlineKeyboardButton("💎 باقات VIP", callback_data="vip_packages")
+    )
+    return keyboard
+
+def create_games_menu():
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        InlineKeyboardButton("🎰 سلوتس", callback_data="game_slots"),
+        InlineKeyboardButton("🎲 النرد", callback_data="game_dice")
+    )
+    keyboard.add(
+        InlineKeyboardButton("⚽ كرة القدم", callback_data="game_football"),
+        InlineKeyboardButton("🏀 السلة", callback_data="game_basketball")
+    )
+    keyboard.add(
+        InlineKeyboardButton("🎯 السهم", callback_data="game_darts"),
+        InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu")
+    )
+    return keyboard
+
+def create_vip_keyboard():
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    keyboard.add(InlineKeyboardButton("🟢 برونزي - 5 USDT", callback_data="buy_bronze"))
+    keyboard.add(InlineKeyboardButton("🔵 فضى - 10 USDT", callback_data="buy_silver"))
+    keyboard.add(InlineKeyboardButton("🟡 ذهبي - 20 USDT", callback_data="buy_gold"))
+    keyboard.add(InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
+    return keyboard
+
+def create_withdraw_keyboard():
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton("💳 تأكيد استخدام BEP20", callback_data="confirm_bep20"))
+    keyboard.add(InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
+    return keyboard
+
+def create_referral_keyboard(user_id):
+    keyboard = InlineKeyboardMarkup()
+    referral_link = f"https://t.me/BNBMini1Bot?start={user_id}"
+    
+    keyboard.add(InlineKeyboardButton("📤 مشاركة الرابط", 
+                url=f"https://t.me/share/url?url={referral_link}&text=انضم إلى هذا البوت الرائع واحصل على 1.0 USDT مجاناً! 🎮"))
+    
+    keyboard.add(InlineKeyboardButton("🔗 نسخ الرابط", callback_data="copy_link"))
+    keyboard.add(InlineKeyboardButton("📊 إحالاتي", callback_data="my_referrals"))
+    keyboard.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
+    
+    return keyboard, referral_link
+
+# 🎮 دوال الألعاب (نفس الكود الأصلي)
+def play_slots_game(user_id):
+    symbols = ["🍒", "🍋", "🍊", "🍇", "🔔", "💎"]
+    result = [random.choice(symbols) for _ in range(3)]
+    return result
+
+def play_dice_game(user_id):
+    user_dice = random.randint(1, 6)
+    bot_dice = random.randint(1, 6)
+    result = "فوز" if user_dice > bot_dice else "خسارة" if user_dice < bot_dice else "تعادل"
+    return user_dice, bot_dice, result
+
+def play_football_game(user_id):
+    outcomes = ["هدف 🥅", "إصابة القائم 🚩", "حارس يصد ⛔"]
+    result = random.choices(outcomes, k=3)
+    return result
+
+def play_basketball_game(user_id):
+    shots = []
+    for i in range(3):
+        shot_type = "🎯 تسجيل ✅" if random.random() > 0.3 else "🎯 أخطأت ❌"
+        shots.append(shot_type)
+    return shots
+
+def play_darts_game(user_id):
+    scores = []
+    for i in range(3):
+        score = random.randint(10, 50)
+        scores.append(f"🎯 نقاط: {score}")
+    return scores
 
 # 🔧 دوال مساعدة
 def get_user(user_id):
@@ -33,7 +125,9 @@ def add_balance(user_id, amount, description="", is_deposit=False):
             'balance': 0.0,
             'total_earned': 0.0,
             'total_deposits': 0.0,
-            'referrals_count': 0
+            'referrals_count': 0,
+            'games_played_today': 0,
+            'vip_level': 0
         }
     
     user['balance'] += amount
@@ -43,7 +137,157 @@ def add_balance(user_id, amount, description="", is_deposit=False):
     
     return save_user(user)
 
-# 🛠️ الأوامر الإدارية
+# 🎯 معالجة الـ Callbacks (الأزرار)
+@bot.callback_query_handler(func=lambda call: True)
+def handle_callbacks(call):
+    user_id = call.from_user.id
+    user = get_user(user_id)
+    
+    if not user:
+        user = {
+            'user_id': user_id,
+            'balance': 0.0,
+            'referrals_count': 0,
+            'games_played_today': 0,
+            'vip_level': 0
+        }
+        save_user(user)
+    
+    if call.data == "main_menu":
+        welcome_text = f"""
+🎮 أهلاً {call.from_user.first_name}!
+
+💰 رصيدك: {user['balance']:.1f} USDT
+👥 إحالاتك: {user['referrals_count']}
+🎯 محاولاتك: {3 - user.get('games_played_today', 0)}/3
+💎 مستوى VIP: {user['vip_level']}"""
+        
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=welcome_text,
+            reply_markup=create_main_menu()
+        )
+    
+    elif call.data == "games_menu":
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text="🎮 اختر لعبة من القائمة:",
+            reply_markup=create_games_menu()
+        )
+    
+    elif call.data == "profile":
+        profile_text = f"""
+📊 الملف الشخصي:
+
+👤 الاسم: {call.from_user.first_name}
+🆔 الآيدي: {user_id}
+💰 الرصيد: {user['balance']:.1f} USDT
+👥 الإحالات: {user['referrals_count']}
+🎯 المحاولات: {3 - user.get('games_played_today', 0)}/3
+💎 VIP: {user['vip_level']}"""
+        
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=profile_text,
+            reply_markup=create_main_menu()
+        )
+    
+    elif call.data == "referral":
+        keyboard, referral_link = create_referral_keyboard(user_id)
+        referral_text = f"""
+👥 نظام الإحالات:
+
+💰 احصل على 1.0 USDT لكل صديق
+🎯 واحصل على محاولة لعب إضافية
+
+🔗 رابط الإحالة الخاص بك:
+{referral_link}"""
+        
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=referral_text,
+            reply_markup=keyboard
+        )
+    
+    elif call.data == "vip_packages":
+        vip_text = """
+💎 باقات VIP:
+
+🟢 برونزي - 5 USDT
+• محاولات لعب غير محدودة
+• مكافآت مضاعفة
+
+🔵 فضى - 10 USDT  
+• كل مزايا البرونزي
+• دعم فني متميز
+
+🟡 ذهبي - 20 USDT
+• كل المزايا السابقة
+• أولوية في السحب"""
+        
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=vip_text,
+            reply_markup=create_vip_keyboard()
+        )
+    
+    elif call.data == "withdraw":
+        withdraw_text = f"""
+💰 سحب رصيد:
+
+💳 الحد الأدنى للسحب: 10 USDT
+🔄 استخدام شبكة BEP20
+
+💰 رصيدك الحالي: {user['balance']:.1f} USDT"""
+        
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=withdraw_text,
+            reply_markup=create_withdraw_keyboard()
+        )
+    
+    elif call.data.startswith("game_"):
+        game_type = call.data.replace("game_", "")
+        
+        if user.get('games_played_today', 0) >= 3:
+            bot.answer_callback_query(call.id, "❌ انتهت محاولاتك اليوم! جددها بالإحالات", show_alert=True)
+            return
+        
+        # زيادة عداد الألعاب
+        user['games_played_today'] = user.get('games_played_today', 0) + 1
+        save_user(user)
+        
+        # تشغيل اللعبة
+        if game_type == "slots":
+            result = play_slots_game(user_id)
+            game_result = f"🎰 نتيجة السلوتس: {' '.join(result)}"
+        elif game_type == "dice":
+            user_dice, bot_dice, result = play_dice_game(user_id)
+            game_result = f"🎲 النرد: أنت {user_dice} vs البوت {bot_dice} - {result}"
+        else:
+            game_result = f"🎮 لعبة {game_type} - تحت التطوير"
+        
+        remaining = 3 - user['games_played_today']
+        result_text = f"""
+{game_result}
+
+🎯 المحاولات المتبقية: {remaining}/3
+💰 اربح 5 USDT كل 3 محاولات!"""
+        
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=result_text,
+            reply_markup=create_games_menu()
+        )
+
+# 🛠️ الأوامر الإدارية (نفس الكود السابق)
 @bot.message_handler(commands=['quickadd'])
 def quick_add_balance(message):
     if message.from_user.id not in ADMIN_IDS:
@@ -91,7 +335,8 @@ def add_user_complete(message):
             'vip_level': vip_level,
             'total_deposits': balance,
             'total_earned': balance,
-            'total_games_played': referrals * 10
+            'total_games_played': referrals * 10,
+            'games_played_today': 0
         }
         
         if save_user(user_data):
@@ -118,7 +363,7 @@ def user_full_info(message):
         
         if user:
             info_text = f"""
-📊 معلومات المستخدم:
+📊 معلومات كاملة:
 
 🆔 الآيدي: {user['user_id']}
 💰 الرصيد: {user.get('balance', 0):.1f} USDT
@@ -127,7 +372,7 @@ def user_full_info(message):
 👥 الإحالات: {user.get('referrals_count', 0)}
 💎 VIP: {user.get('vip_level', 0)}
 🎮 الألعاب: {user.get('total_games_played', 0)}
-"""
+🎯 المحاولات: {3 - user.get('games_played_today', 0)}/3"""
             bot.reply_to(message, info_text)
         else:
             bot.reply_to(message, "❌ المستخدم غير موجود!")
@@ -168,7 +413,7 @@ def list_backups(message):
     except Exception as e:
         bot.reply_to(message, f"❌ خطأ: {e}")
 
-# 🎯 الأوامر الأساسية
+# 🎯 الأمر start الأساسي
 @bot.message_handler(commands=['start'])
 def start_command(message):
     user_id = message.from_user.id
@@ -183,25 +428,27 @@ def start_command(message):
             'referrals_count': 0,
             'total_deposits': 0.0,
             'total_earned': 0.0,
-            'vip_level': 0
+            'vip_level': 0,
+            'games_played_today': 0
         }
         save_user(user_data)
         user = user_data
     
     welcome_text = f"""
-🎮 أهلاً {message.from_user.first_name}!
+🎮 أهلاً وسهلاً {message.from_user.first_name}!
 
 💰 رصيدك: {user['balance']:.1f} USDT
 👥 إحالاتك: {user['referrals_count']}
+🎯 المحاولات: {3 - user['games_played_today']}/3
 💎 مستوى VIP: {user['vip_level']}
 
-🚀 البوت يعمل بنجاح!"""
+🏆 اربح 5 USDT كل 3 محاولات!"""
     
-    bot.reply_to(message, welcome_text)
+    bot.send_message(message.chat.id, welcome_text, reply_markup=create_main_menu())
 
 @bot.message_handler(commands=['test'])
 def test_command(message):
-    bot.reply_to(message, "✅ البوت يعمل! جرب الأوامر الإدارية")
+    bot.reply_to(message, "✅ البوت يعمل! جرب الأزرار في القائمة الرئيسية")
 
 @bot.message_handler(commands=['myid'])
 def myid_command(message):
@@ -218,7 +465,7 @@ def health_check():
         "status": "healthy", 
         "users_count": len(users_db),
         "backups_count": len(backups_db),
-        "version": "2.0"
+        "version": "3.0"
     }
 
 @app.route('/')
@@ -235,7 +482,7 @@ def webhook():
     return 'Forbidden', 403
 
 if __name__ == "__main__":
-    print("🚀 بدأ تشغيل البوت مع نظام الذاكرة...")
+    print("🚀 بدأ تشغيل البوت مع الأزرار والألعاب...")
     try:
         bot.remove_webhook()
         import time
@@ -244,7 +491,8 @@ if __name__ == "__main__":
         WEBHOOK_URL = f'https://usdt-bot-live.onrender.com/{BOT_TOKEN}'
         bot.set_webhook(url=WEBHOOK_URL)
         print(f"✅ Webhook مضبوط: {WEBHOOK_URL}")
-        print(f"✅ نظام الذاكرة جاهز")
+        print(f"✅ نظام الأزرار جاهز")
+        print(f"✅ نظام الألعاب جاهز")
         
         PORT = int(os.environ.get('PORT', 10000))
         app.run(host='0.0.0.0', port=PORT, debug=False)
