@@ -11,7 +11,7 @@ import random
 import json
 
 # تكوين الأساسيات
-BOT_TOKEN = "BOT_TOKEN = "8385331860:AAEcFqGY4vXORINuGUH6XpmSN9-FtluEMj8""
+"BOT_TOKEN = "8385331860:AAEcFqGY4vXORINuGUH6XpmSN9-FtluEMj8"
 bot = telebot.TeleBot(BOT_TOKEN, threaded=True, num_threads=10)
 app = Flask(__name__)
 
