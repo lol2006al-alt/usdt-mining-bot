@@ -241,6 +241,33 @@ def get_user_referrals(user_id):
     ''', (user_id,))
     return cursor.fetchall()
 
+# 🔧 دوال المساعدة - الدوال الجديدة
+def get_vip_bonus_info(vip_level):
+    """معلومات مكافآت VIP"""
+    bonuses = {
+        1: {"daily_bonus": 0.5, "extra_games": 2, "name": "برونزي"},
+        2: {"daily_bonus": 1.0, "extra_games": 4, "name": "فضى"},
+        3: {"daily_bonus": 2.0, "extra_games": 6, "name": "ذهبي"}
+    }
+    return bonuses.get(vip_level, {"daily_bonus": 0, "extra_games": 0, "name": "لا يوجد"})
+
+def get_next_bonus_time(last_bonus_time):
+    """حساب وقت المكافأة التالية"""
+    if not last_bonus_time:
+        return "الآن!"
+    
+    last_time = datetime.fromisoformat(last_bonus_time)
+    next_time = last_time + timedelta(hours=24)
+    now = datetime.now()
+    
+    if now >= next_time:
+        return "الآن!"
+    else:
+        remaining = next_time - now
+        hours = int(remaining.total_seconds() // 3600)
+        minutes = int((remaining.total_seconds() % 3600) // 60)
+        return f"{hours}س {minutes}د"
+
 # 🎯 إنشاء الأزرار
 def create_main_menu():
     keyboard = InlineKeyboardMarkup(row_width=2)
@@ -419,10 +446,14 @@ def handle_callbacks(call):
     
     elif call.data == "games_menu":
         remaining_games = 3 - user['games_played_today']
+        vip_info = get_vip_bonus_info(user['vip_level'])
+        extra_games = vip_info['extra_games'] if user['vip_level'] > 0 else 0
+        total_remaining = remaining_games + extra_games
+        
         games_text = f"""
         🎮 **قائمة الألعاب المتاحة**
 
-        🎯 المحاولات المتبقية: {remaining_games}/3
+        🎯 المحاولات المتبقية: {total_remaining} ({remaining_games} أساسية + {extra_games} إضافية)
         💰 الربح: 5 USDT كل 3 محاولات
 
         🎰 **السلوتس** - اختر الرموز واربح
@@ -510,14 +541,22 @@ def handle_callbacks(call):
 🟢 *برونزي* - 5 USDT
 • مكافأة يومية: 0.5 USDT
 • +10% أرباح تعدين
+• +2 محاولات لعب إضافية يومياً
+• مؤتمر المكافآت المباشر
 
 🔵 *فضى* - 10 USDT  
 • مكافأة يومية: 1.0 USDT
 • +25% أرباح تعدين
+• +4 محاولات لعب إضافية يومياً
+• مؤتمر المكافآت المباشر
 
 🟡 *ذهبي* - 20 USDT
 • مكافأة يومية: 2.0 USDT  
 • +50% أرباح تعدين
+• +6 محاولات لعب إضافية يومياً
+• مؤتمر المكافآت المباشر
+
+⏰ *المكافآت تصل تلقائياً كل 24 ساعة*
 
 اختر الباقة المناسبة:"""
             
@@ -537,9 +576,11 @@ def handle_callbacks(call):
         vip_type = call.data.replace("buy_", "")
         prices = {"bronze": 5.0, "silver": 10.0, "gold": 20.0}
         names = {"bronze": "🟢 برونزي", "silver": "🔵 فضى", "gold": "🟡 ذهبي"}
+        extra_games = {"bronze": 2, "silver": 4, "gold": 6}  # 🆕 محاولات إضافية
         
         price = prices.get(vip_type)
         name = names.get(vip_type)
+        games_bonus = extra_games.get(vip_type, 0)
         
         if not price:
             bot.answer_callback_query(call.id, "❌ نوع VIP غير صحيح")
@@ -549,6 +590,10 @@ def handle_callbacks(call):
             user['balance'] -= price
             user['vip_level'] = {"bronze": 1, "silver": 2, "gold": 3}[vip_type]
             user['vip_expiry'] = (datetime.now() + timedelta(days=30)).isoformat()
+            # 🆕 إضافة المحاولات الإضافية
+            user['games_played_today'] = max(0, user['games_played_today'] - games_bonus)
+            user['last_daily_bonus'] = datetime.now().isoformat()
+            
             save_user(user)
             
             success_msg = f"""
@@ -556,8 +601,14 @@ def handle_callbacks(call):
 
 💰 تم خصم {price} USDT
 💎 رصيدك الجديد: {user['balance']:.1f} USDT
+🎯 *تم إضافة {games_bonus} محاولات لعب إضافية!*
 
-⭐ تم تفعيل المزايا الحصرية
+⭐ **المزايا المشغلة:**
+• مكافأة يومية: {get_vip_bonus_info(user['vip_level'])['daily_bonus']} USDT
+• محاولات إضافية: {games_bonus}
+• أرباح مضاعفة في الألعاب
+
+⏰ المكافأة القادمة: بعد 24 ساعة
 استمتع! 🏆"""
             
             bot.edit_message_text(
@@ -735,6 +786,14 @@ def handle_callbacks(call):
     
     elif call.data == "profile":
         remaining_games = 3 - user['games_played_today']
+        vip_info = get_vip_bonus_info(user['vip_level'])
+        
+        # 🆕 حساب المؤقتات
+        bonus_timer = get_next_bonus_time(user.get('last_daily_bonus'))
+        
+        # 🆕 حساب المحاولات الإضافية لـ VIP
+        extra_games = vip_info['extra_games'] if user['vip_level'] > 0 else 0
+        total_remaining = remaining_games + extra_games
         
         # ✅ حساب الإحالات الجديدة المطلوبة للسحب
         new_referrals_info = ""
@@ -755,8 +814,11 @@ def handle_callbacks(call):
 🆔 **المعرف:** `{user_id}`
 💰 **الرصيد:** {user['balance']:.1f} USDT
 👥 **الإحالات:** {user['referrals_count']} مستخدم
-{new_referrals_info}🏆 **مستوى VIP:** {user['vip_level']}
-🎯 **المحاولات المتبقية:** {remaining_games}/3
+{new_referrals_info}🏆 **مستوى VIP:** {vip_info['name']}
+🎯 **المحاولات المتبقية:** {total_remaining} ({remaining_games} أساسية + {extra_games} إضافية)
+
+{'⏰ **مكافأة التعدين:** ' + bonus_timer + ' ⏳' if user['vip_level'] > 0 else '💡 **انضم لـ VIP للحصول على مكافآت يومية!**'}
+
 💎 **إجمالي الأرباح:** {user['total_earned']:.1f} USDT
 💳 **إجمالي الإيداعات:** {user['total_deposits']:.1f} USDT
 📅 **تاريخ التسجيل:** {user['registration_date'][:10]}
@@ -797,27 +859,22 @@ def add_balance_admin(message):
         target_user_id = int(parts[1])
         amount = float(parts[2])
         
-        # 🚀 بدء التشغيل بنظام Polling للتأكد من العمل
-if __name__ == "__main__":
-    print("🚀 بدأ تشغيل البوت بنظام Polling...")
-    
-    try:
-        # تنظيف أي Webhook قديم أولاً
-        bot.remove_webhook()
-        time.sleep(3)
+        # التحقق من وجود المستخدم
+        target_user = get_user(target_user_id)
+        if not target_user:
+            bot.send_message(message.chat.id, f"❌ المستخدم {target_user_id} غير موجود!")
+            return
         
-        print("✅ البوت يعمل! جرب الأوامر الآن:")
-        print("   /debug - فحص النظام")
-        print("   /myid - معرفة الآيدي") 
-        print("   /addbalance [آيدي] [مبلغ] - إضافة رصيد")
+        add_balance(target_user_id, amount, f"إضافة إدارية بواسطة {message.from_user.id}", is_deposit=True)
         
-        # استخدام Polling بدلاً من Webhook
-        bot.infinity_polling(timeout=60, long_polling_timeout=60, restart_on_change=True)
-        
-    except Exception as e:
-        print(f"❌ خطأ في التشغيل: {e}")
-        print("🔄 إعادة المحاولة خلال 10 ثواني...")
-        time.sleep(10)
+        # الحصول على بيانات المستخدم المحدثة
+        target_user = get_user(target_user_id)
+        bot.send_message(
+            message.chat.id, 
+            f"✅ تم إضافة {amount} USDT للمستخدم {target_user_id}\n"
+            f"💰 الرصيد الجديد: {target_user['balance']:.1f} USDT\n"
+            f"💳 إجمالي الإيداعات: {target_user['total_deposits']:.1f} USDT"
+        )
         
         # إرسال إشعار للمستخدم
         try:
@@ -882,6 +939,11 @@ def userinfo_admin(message):
         
         if user:
             remaining_games = 3 - user['games_played_today']
+            vip_info = get_vip_bonus_info(user['vip_level'])
+            extra_games = vip_info['extra_games'] if user['vip_level'] > 0 else 0
+            total_remaining = remaining_games + extra_games
+            bonus_timer = get_next_bonus_time(user.get('last_daily_bonus'))
+            
             info_text = f"""
 📊 **معلومات المستخدم:**
 
@@ -890,8 +952,9 @@ def userinfo_admin(message):
 📛 **اليوزرنيم:** @{user.get('username', 'غير متوفر')}
 💰 **الرصيد:** {user['balance']:.1f} USDT
 👥 **الإحالات:** {user['referrals_count']}
-🏆 **مستوى VIP:** {user['vip_level']}
-🎯 **المحاولات المتبقية:** {remaining_games}/3
+🏆 **مستوى VIP:** {vip_info['name']}
+🎯 **المحاولات المتبقية:** {total_remaining} ({remaining_games} أساسية + {extra_games} إضافية)
+⏰ **مكافأة التعدين:** {bonus_timer}
 💎 **إجمالي الأرباح:** {user['total_earned']:.1f} USDT
 💳 **إجمالي الإيداعات:** {user['total_deposits']:.1f} USDT
 📅 **تاريخ التسجيل:** {user['registration_date'][:10]}
@@ -927,6 +990,52 @@ def show_admins(message):
         parse_mode='Markdown'
     )
 
+# 🆕 أمر المكافآت اليومية
+@bot.message_handler(commands=['dailybonus'])
+def daily_bonus_command(message):
+    """منح المكافآت اليومية للمستخدمين"""
+    user_id = message.from_user.id
+    user = get_user(user_id)
+    
+    if not user:
+        bot.send_message(message.chat.id, "❌ حسابك غير مسجل في النظام!")
+        return
+    
+    vip_info = get_vip_bonus_info(user['vip_level'])
+    
+    # التحقق إذا حان وقت المكافأة
+    can_claim = True
+    if user.get('last_daily_bonus'):
+        last_time = datetime.fromisoformat(user['last_daily_bonus'])
+        next_time = last_time + timedelta(hours=24)
+        can_claim = datetime.now() >= next_time
+    
+    if user['vip_level'] == 0:
+        bot.send_message(message.chat.id, "❌ هذه الميزة متاحة لأعضاء VIP فقط!")
+        return
+    
+    if not can_claim:
+        next_time = get_next_bonus_time(user.get('last_daily_bonus'))
+        bot.send_message(message.chat.id, f"⏳ لم يحن وقت المكافأة بعد!\n⏰ عود بعد: {next_time}")
+        return
+    
+    # منح المكافأة
+    bonus_amount = vip_info['daily_bonus']
+    add_balance(user_id, bonus_amount, f"مكافأة تعدين VIP {vip_info['name']}")
+    
+    # تحديث وقت المكافأة
+    user['last_daily_bonus'] = datetime.now().isoformat()
+    save_user(user)
+    
+    bot.send_message(
+        message.chat.id,
+        f"🎉 **تم استلام مكافأة التعدين!**\n\n"
+        f"💰 المبلغ: {bonus_amount} USDT\n"
+        f"💎 الرصيد الجديد: {user['balance'] + bonus_amount:.1f} USDT\n"
+        f"⏰ المكافأة القادمة: بعد 24 ساعة\n\n"
+        f"استمر في اللعب لكسب المزيد! 🎮"
+    )
+
 # 🆕 الأوامر الجديدة المطلوبة
 @bot.message_handler(commands=['debug'])
 def debug_bot(message):
@@ -946,7 +1055,7 @@ def debug_bot(message):
 🤖 البوت: {bot_info.first_name} (@{bot_info.username})
 🗃️ قاعدة البيانات: {db_status}
 🆔 آيديك: {message.from_user.id}
-📊 الإصدار: 7.0
+📊 الإصدار: 8.0
 """
         bot.send_message(message.chat.id, debug_text)
         
@@ -1052,7 +1161,7 @@ def health_check():
             "timestamp": datetime.now().isoformat(),
             "total_users": total_users,
             "total_referrals": total_referrals,
-            "version": "7.0",
+            "version": "8.0",
             "performance": "excellent"
         }
     except Exception as e:
