@@ -9,7 +9,6 @@ from datetime import datetime, timedelta
 import os
 import random
 import json
-import requests
 
 # تكوين الأساسيات
 BOT_TOKEN = "8385331860:AAEcFqGY4vXORINuGUHGXpmSN9-Ft1uEMj8"
@@ -255,6 +254,84 @@ def list_sql_backups():
         return []
 
 # 🛠️ الأوامر الإدارية الشاملة
+@bot.message_handler(commands=['quickadd'])
+def quick_add_balance(message):
+    """إضافة رصيد سريعة - الأمر الأساسي"""
+    if message.from_user.id not in ADMIN_IDS:
+        bot.send_message(message.chat.id, "❌ ليس لديك صلاحية لهذا الأمر!")
+        return
+    
+    try:
+        parts = message.text.split()
+        if len(parts) != 3:
+            bot.send_message(message.chat.id, "❌ استخدم: /quickadd [user_id] [amount]")
+            return
+        
+        target_user_id = int(parts[1])
+        amount = float(parts[2])
+        
+        if add_balance(target_user_id, amount, f"إضافة إدارية بواسطة {message.from_user.id}", is_deposit=True):
+            user = get_user(target_user_id)
+            bot.send_message(
+                message.chat.id, 
+                f"✅ تم إضافة {amount} USDT للمستخدم {target_user_id}\n"
+                f"💰 الرصيد الجديد: {user['balance']:.1f} USDT\n"
+                f"💳 إجمالي الإيداعات: {user['total_deposits']:.1f} USDT"
+            )
+            
+            # إشعار المستخدم
+            try:
+                bot.send_message(
+                    target_user_id,
+                    f"🎉 تم إضافة {amount} USDT إلى رصيدك!\n"
+                    f"💰 رصيدك الحالي: {user['balance']:.1f} USDT\n"
+                    f"💳 إجمالي إيداعاتك: {user['total_deposits']:.1f} USDT"
+                )
+            except:
+                pass
+        else:
+            bot.send_message(message.chat.id, "❌ فشل في إضافة الرصيد")
+            
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ خطأ: {e}")
+
+@bot.message_handler(commands=['quickremove'])
+def quick_remove_balance(message):
+    """سحب رصيد سريع"""
+    if message.from_user.id not in ADMIN_IDS:
+        bot.send_message(message.chat.id, "❌ ليس لديك صلاحية لهذا الأمر!")
+        return
+    
+    try:
+        parts = message.text.split()
+        if len(parts) != 3:
+            bot.send_message(message.chat.id, "❌ استخدم: /quickremove [user_id] [amount]")
+            return
+        
+        target_user_id = int(parts[1])
+        amount = float(parts[2])
+        
+        user = get_user(target_user_id)
+        if user:
+            if user['balance'] >= amount:
+                old_balance = user['balance']
+                user['balance'] -= amount
+                if save_user(user):
+                    bot.send_message(
+                        message.chat.id, 
+                        f"✅ تم سحب {amount} USDT من المستخدم {target_user_id}\n"
+                        f"📊 الرصيد السابق: {old_balance:.1f} USDT\n"
+                        f"💰 الرصيد الجديد: {user['balance']:.1f} USDT"
+                    )
+                else:
+                    bot.send_message(message.chat.id, "❌ فشل في سحب الرصيد")
+            else:
+                bot.send_message(message.chat.id, f"❌ رصيد المستخدم غير كافٍ! الرصيد الحالي: {user['balance']:.1f}")
+        else:
+            bot.send_message(message.chat.id, "❌ المستخدم غير موجود!")
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ خطأ: {e}")
+
 @bot.message_handler(commands=['adduser'])
 def add_user_complete(message):
     """إضافة مستخدم جديد بجميع البيانات"""
@@ -331,77 +408,58 @@ def add_user_complete(message):
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ خطأ: {e}")
 
-@bot.message_handler(commands=['quickadd'])
-def quick_add_balance(message):
-    """إضافة رصيد سريعة - الأمر الأساسي"""
+@bot.message_handler(commands=['userfullinfo'])
+def user_full_info(message):
+    """عرض معلومات كاملة عن المستخدم"""
     if message.from_user.id not in ADMIN_IDS:
         bot.send_message(message.chat.id, "❌ ليس لديك صلاحية لهذا الأمر!")
         return
     
     try:
         parts = message.text.split()
-        if len(parts) != 3:
-            bot.send_message(message.chat.id, "❌ استخدم: /quickadd [user_id] [amount]")
+        if len(parts) != 2:
+            bot.send_message(message.chat.id, "❌ استخدم: /userfullinfo [user_id]")
             return
         
-        target_user_id = int(parts[1])
-        amount = float(parts[2])
+        user_id = int(parts[1])
+        user = get_user(user_id)
         
-        if add_balance(target_user_id, amount, f"إضافة إدارية بواسطة {message.from_user.id}", is_deposit=True):
-            user = get_user(target_user_id)
-            bot.send_message(
-                message.chat.id, 
-                f"✅ تم إضافة {amount} USDT للمستخدم {target_user_id}\n"
-                f"💰 الرصيد الجديد: {user['balance']:.1f} USDT\n"
-                f"💳 إجمالي الإيداعات: {user['total_deposits']:.1f} USDT"
-            )
-            
-            # إشعار المستخدم
-            try:
-                bot.send_message(
-                    target_user_id,
-                    f"🎉 تم إضافة {amount} USDT إلى رصيدك!\n"
-                    f"💰 رصيدك الحالي: {user['balance']:.1f} USDT\n"
-                    f"💳 إجمالي إيداعاتك: {user['total_deposits']:.1f} USDT"
-                )
-            except:
-                pass
-        else:
-            bot.send_message(message.chat.id, "❌ فشل في إضافة الرصيد")
-            
-    except Exception as e:
-        bot.send_message(message.chat.id, f"❌ خطأ: {e}")
-
-@bot.message_handler(commands=['quickremove'])
-def quick_remove_balance(message):
-    """سحب رصيد سريع"""
-    if message.from_user.id not in ADMIN_IDS:
-        bot.send_message(message.chat.id, "❌ ليس لديك صلاحية لهذا الأمر!")
-        return
-    
-    try:
-        parts = message.text.split()
-        if len(parts) != 3:
-            bot.send_message(message.chat.id, "❌ استخدم: /quickremove [user_id] [amount]")
-            return
-        
-        target_user_id = int(parts[1])
-        amount = float(parts[2])
-        
-        user = get_user(target_user_id)
         if user:
-            if user['balance'] >= amount:
-                user['balance'] -= amount
-                if save_user(user):
-                    bot.send_message(
-                        message.chat.id, 
-                        f"✅ تم سحب {amount} USDT من المستخدم {target_user_id}\n"
-                        f"💰 الرصيد الجديد: {user['balance']:.1f} USDT"
-                    )
-                else:
-                    bot.send_message(message.chat.id, "❌ فشل في سحب الرصيد")
-            else:
-                bot.send_message(message.chat.id, f"❌ رصيد المستخدم غير كافٍ! الرصيد الحالي: {user['balance']:.1f}")
+            remaining_games = 3 - user['games_played_today']
+            vip_expiry = user['vip_expiry'][:10] if user['vip_expiry'] else "غير محدد"
+            reg_date = user['registration_date'][:10] if user['registration_date'] else "غير معروف"
+            
+            info_text = f"""
+📊 **معلومات كاملة عن المستخدم:**
+
+🆔 **الآيدي:** `{user['user_id']}`
+👤 **الاسم:** {user['first_name']} {user.get('last_name', '')}
+📛 **اليوزرنيم:** @{user.get('username', 'غير متوفر')}
+
+💰 **الحساب المالي:**
+• الرصيد: {user['balance']:.1f} USDT
+• إجمالي الإيداعات: {user['total_deposits']:.1f} USDT
+• إجمالي الأرباح: {user['total_earned']:.1f} USDT
+
+🎮 **إحصائيات الألعاب:**
+• المحاولات المتبقية: {remaining_games}/3
+• إجمالي الألعاب: {user['total_games_played']}
+• عداد المكافآت: {user['games_counter']}/3
+
+👥 **نظام الإحالات:**
+• عدد الإحالات: {user['referrals_count']}
+• الإحالات الجديدة: {user['new_referrals_count']}
+• محاولات السحب: {user['withdrawal_attempts']}
+
+💎 **معلومات VIP:**
+• المستوى: {user['vip_level']}
+• انتهاء الصلاحية: {vip_expiry}
+
+📅 **معلومات عامة:**
+• تاريخ التسجيل: {reg_date}
+• آخر مكافأة يومية: {user['last_daily_bonus'] or 'غير محدد'}
+"""
+            bot.send_message(message.chat.id, info_text, parse_mode='Markdown')
         else:
             bot.send_message(message.chat.id, "❌ المستخدم غير موجود!")
     except Exception as e:
@@ -466,8 +524,6 @@ def list_backups(message):
         bot.send_message(message.chat.id, f"❌ خطأ: {str(e)}")
 
 # 🎯 كل الأزرار والوظائف الحالية تبقى كما هي تماماً
-# ... [كل الكود الأصلي للأزرار والألعاب يبقى كما هو]
-
 def create_main_menu():
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
@@ -484,54 +540,124 @@ def create_main_menu():
     )
     return keyboard
 
-# ... [باقي دوال إنشاء الأزرار والألعاب تبقى كما هي]
+def create_games_menu():
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        InlineKeyboardButton("🎰 سلوتس", callback_data="game_slots"),
+        InlineKeyboardButton("🎲 النرد", callback_data="game_dice")
+    )
+    keyboard.add(
+        InlineKeyboardButton("⚽ كرة القدم", callback_data="game_football"),
+        InlineKeyboardButton("🏀 السلة", callback_data="game_basketball")
+    )
+    keyboard.add(
+        InlineKeyboardButton("🎯 السهم", callback_data="game_darts"),
+        InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu")
+    )
+    return keyboard
 
+def create_vip_keyboard():
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    keyboard.add(InlineKeyboardButton("🟢 برونزي - 5 USDT", callback_data="buy_bronze"))
+    keyboard.add(InlineKeyboardButton("🔵 فضى - 10 USDT", callback_data="buy_silver"))
+    keyboard.add(InlineKeyboardButton("🟡 ذهبي - 20 USDT", callback_data="buy_gold"))
+    keyboard.add(InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
+    return keyboard
+
+def create_withdraw_keyboard():
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton("💳 تأكيد استخدام BEP20", callback_data="confirm_bep20"))
+    keyboard.add(InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
+    return keyboard
+
+def create_referral_keyboard(user_id):
+    keyboard = InlineKeyboardMarkup()
+    referral_link = f"https://t.me/BNBMini1Bot?start={user_id}"
+    
+    keyboard.add(InlineKeyboardButton("📤 مشاركة الرابط", 
+                url=f"https://t.me/share/url?url={referral_link}&text=انضم إلى هذا البوت الرائع واحصل على 1.0 USDT مجاناً! 🎮"))
+    
+    keyboard.add(InlineKeyboardButton("🔗 نسخ الرابط", callback_data="copy_link"))
+    keyboard.add(InlineKeyboardButton("📊 إحالاتي", callback_data="my_referrals"))
+    keyboard.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
+    
+    return keyboard, referral_link
+
+# 🎮 دوال الألعاب
+def play_slots_game(user_id):
+    symbols = ["🍒", "🍋", "🍊", "🍇", "🔔", "💎"]
+    result = [random.choice(symbols) for _ in range(3)]
+    return result
+
+def play_dice_game(user_id):
+    user_dice = random.randint(1, 6)
+    bot_dice = random.randint(1, 6)
+    result = "فوز" if user_dice > bot_dice else "خسارة" if user_dice < bot_dice else "تعادل"
+    return user_dice, bot_dice, result
+
+def play_football_game(user_id):
+    outcomes = ["هدف 🥅", "إصابة القائم 🚩", "حارس يصد ⛔"]
+    result = random.choices(outcomes, k=3)
+    return result
+
+def play_basketball_game(user_id):
+    shots = []
+    for i in range(3):
+        shot_type = "🎯 تسجيل ✅" if random.random() > 0.3 else "🎯 أخطأت ❌"
+        shots.append(shot_type)
+    return shots
+
+def play_darts_game(user_id):
+    scores = []
+    for i in range(3):
+        score = random.randint(10, 50)
+        scores.append(f"🎯 نقاط: {score}")
+    return scores
+
+# 🎯 الأوامر الأساسية
 @bot.message_handler(commands=['start'])
 def start_command(message):
     user_id = message.from_user.id
     user = get_user(user_id)
     
     if not user:
-        # ... [الكود الأصلي مع تعديلات بسيطة لـ PostgreSQL]
-        new_user = {
-            'user_id': user_id,
-            'username': message.from_user.username,
-            'first_name': message.from_user.first_name,
-            'last_name': message.from_user.last_name,
-            'balance': 0.0,
-            'referrals_count': 0,
-            'games_played_today': 0,
-            'total_deposits': 0.0,
-            'withdrawal_attempts': 0,
-            'new_referrals_count': 0
-        }
+        referrer_id = None
+        referral_bonus = 0
         
-        # معالجة الإحالات
         if len(message.text.split()) > 1:
             try:
                 referrer_id = int(message.text.split()[1])
                 referrer_user = get_user(referrer_id)
                 
                 if referrer_user and referrer_id != user_id:
-                    new_user['referrer_id'] = referrer_id
-                    new_user['balance'] = 1.0
-                    
-                    # تحديث إحالات المُحيل
-                    referrer_user['referrals_count'] += 1
-                    referrer_user['balance'] += 1.0
-                    save_user(referrer_user)
-                    
-                    # تسجيل الإحالة
-                    cursor = db_connection.cursor()
-                    cursor.execute(
-                        "INSERT INTO referrals (referrer_id, referred_id) VALUES (%s, %s)",
-                        (referrer_id, user_id)
-                    )
-                    db_connection.commit()
-                    
+                    if add_referral(referrer_id, user_id):
+                        add_balance(user_id, 1.0, "مكافأة انضمام بالإحالة")
+                        referral_bonus = 1.0
+                        
+                        try:
+                            bot.send_message(
+                                referrer_id,
+                                f"🎉 تم انضمام صديقك باستخدام رابطك!\n"
+                                f"💰 حصلت على 1.0 USDT مكافأة إحالة\n"
+                                f"🎯 وحصلت على محاولة لعب إضافية!"
+                            )
+                        except:
+                            pass
             except:
-                pass
+                referrer_id = None
         
+        new_user = {
+            'user_id': user_id,
+            'username': message.from_user.username,
+            'first_name': message.from_user.first_name,
+            'last_name': message.from_user.last_name,
+            'referrer_id': referrer_id,
+            'balance': 0.0 + referral_bonus,
+            'games_played_today': 3,
+            'total_deposits': 0.0,
+            'withdrawal_attempts': 0,
+            'new_referrals_count': 0
+        }
         save_user(new_user)
         user = new_user
         
@@ -556,7 +682,44 @@ def start_command(message):
     
     bot.send_message(message.chat.id, welcome_text, reply_markup=create_main_menu())
 
-# ... [باقي معالجات الأزرار والألعاب تبقى كما هي]
+def add_referral(referrer_id, referred_id):
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute("SELECT * FROM referrals WHERE referrer_id = %s AND referred_id = %s", 
+                      (referrer_id, referred_id))
+        if cursor.fetchone():
+            return False
+        
+        cursor.execute("INSERT INTO referrals (referrer_id, referred_id) VALUES (%s, %s)", 
+                      (referrer_id, referred_id))
+        cursor.execute("UPDATE users SET referrals_count = referrals_count + 1 WHERE user_id = %s", 
+                      (referrer_id,))
+        
+        # تحديث الإحالات الجديدة إذا كان لديه محاولات سحب
+        cursor.execute("SELECT withdrawal_attempts FROM users WHERE user_id = %s", (referrer_id,))
+        result = cursor.fetchone()
+        if result and result[0] > 0:
+            cursor.execute("UPDATE users SET new_referrals_count = new_referrals_count + 1 WHERE user_id = %s", 
+                          (referrer_id,))
+        
+        # منح مكافأة 1.0 USDT للمُحيل
+        referrer_user = get_user(referrer_id)
+        if referrer_user:
+            referrer_user['balance'] += 1.0
+            referrer_user['total_earned'] += 1.0
+            save_user(referrer_user)
+            
+            cursor.execute(
+                "INSERT INTO transactions (user_id, type, amount, description) VALUES (%s, %s, %s, %s)",
+                (referrer_id, 'referral_bonus', 1.0, f"مكافأة إحالة للمستخدم {referred_id}")
+            )
+        
+        db_connection.commit()
+        return True
+    except Exception as e:
+        print(f"❌ خطأ في إضافة الإحالة: {e}")
+        db_connection.rollback()
+        return False
 
 # 🌐 نظام الصحة
 @app.route('/health')
