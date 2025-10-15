@@ -7,6 +7,7 @@ import time
 from datetime import datetime, timedelta
 import os
 import random
+import requests
 
 # 🔧 فقط قم بتغيير التوكن هنا 👇
 BOT_TOKEN = "8385331860:AAEcFqGY4vXORINuGUHGXpmSN9-Ft1uEMj8"  # 🔄 ضع توكنك الجديد هنا
@@ -15,6 +16,23 @@ app = Flask(__name__)
 
 # 🔐 إعدادات المشرفين - أنت المسؤول الوحيد
 ADMIN_IDS = [8400225549]  # ✅ أنت المشرف الرئيسي!
+
+# 🔄 نظام النبض التلقائي لمنع النوم
+def keep_alive():
+    def ping_server():
+        while True:
+            try:
+                # تحديث كل 5 دقائق
+                requests.get('https://usdt-bot-working.onrender.com/health')
+                print("✅ تم إرسال نبض حياة")
+                time.sleep(300)  # ⬅️ 300 ثانية = 5 دقائق
+            except Exception as e:
+                print(f"❌ خطأ في النبض: {e}")
+                time.sleep(60)
+    
+    # تشغيل النبض في خيط منفصل
+    thread = threading.Thread(target=ping_server, daemon=True)
+    thread.start()
 
 # 🔧 تهيئة قاعدة البيانات
 def init_db():
@@ -1036,6 +1054,84 @@ def daily_bonus_command(message):
         f"استمر في اللعب لكسب المزيد! 🎮"
     )
 
+# 🆕 أمر الإضافة السريعة للمستخدمين الجدد
+@bot.message_handler(commands=['quickadd'])
+def quick_add_balance(message):
+    if message.from_user.id not in ADMIN_IDS:
+        bot.send_message(message.chat.id, "❌ ليس لديك صلاحية لهذا الأمر!")
+        return
+    
+    try:
+        parts = message.text.split()
+        if len(parts) != 3:
+            bot.send_message(message.chat.id, "❌ استخدم: /quickadd [user_id] [amount]")
+            return
+        
+        target_user_id = int(parts[1])
+        amount = float(parts[2])
+        
+        # التحقق إذا المستخدم موجود، إذا لا فأنشئه
+        user = get_user(target_user_id)
+        if not user:
+            # إنشاء المستخدم تلقائياً
+            new_user = {
+                'user_id': target_user_id,
+                'username': f"user_{target_user_id}",
+                'first_name': f"User {target_user_id}",
+                'last_name': "",
+                'balance': amount,  # إضافة الرصيد مباشرة
+                'games_played_today': 3,
+                'total_deposits': amount,
+                'total_earned': amount,
+                'withdrawal_attempts': 0,
+                'new_referrals_count': 0
+            }
+            save_user(new_user)
+            
+            # تسجيل المعاملة
+            cursor = db_connection.cursor()
+            cursor.execute(
+                "INSERT INTO transactions (user_id, type, amount, description) VALUES (?, ?, ?, ?)",
+                (target_user_id, 'deposit', amount, f"إنشاء وإضافة بواسطة {message.from_user.id}")
+            )
+            cursor.execute(
+                "INSERT INTO deposits (user_id, amount) VALUES (?, ?)",
+                (target_user_id, amount)
+            )
+            db_connection.commit()
+            
+            created_msg = "🆕 *تم إنشاء المستخدم تلقائياً*\n"
+        else:
+            created_msg = ""
+            # إضافة الرصيد للمستخدم الموجود
+            add_balance(target_user_id, amount, f"إضافة إدارية سريعة بواسطة {message.from_user.id}", is_deposit=True)
+        
+        user = get_user(target_user_id)  # احصل على البيانات المحدثة
+        
+        bot.send_message(
+            message.chat.id,
+            f"{created_msg}"
+            f"✅ **تم إضافة {amount} USDT للمستخدم {target_user_id}**\n\n"
+            f"💰 الرصيد الجديد: {user['balance']:.1f} USDT\n"
+            f"💳 إجمالي الإيداعات: {user['total_deposits']:.1f} USDT\n"
+            f"👤 المستخدم: {user['first_name']}"
+        )
+        
+        # إرسال إشعار للمستخدم (إذا كان البوت يعرفه)
+        try:
+            bot.send_message(
+                target_user_id,
+                f"🎉 **تم إضافة {amount} USDT إلى رصيدك!**\n\n"
+                f"💰 رصيدك الحالي: {user['balance']:.1f} USDT\n"
+                f"💳 إجمالي إيداعاتك: {user['total_deposits']:.1f} USDT\n\n"
+                f"استمتع! 🎮"
+            )
+        except:
+            pass
+            
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ خطأ: {e}")
+
 # 🆕 الأوامر الجديدة المطلوبة
 @bot.message_handler(commands=['debug'])
 def debug_bot(message):
@@ -1187,6 +1283,10 @@ if __name__ == "__main__":
     print("🚀 بدأ تشغيل البوت على Render بنظام Webhook...")
     
     try:
+        # 🔥 تشغيل نظام النبض التلقائي
+        keep_alive()
+        print("✅ نظام النبض التلقائي مفعل - البوت سيبقى مستيقظاً!")
+        
         # إعداد ويب هوك
         bot.remove_webhook()
         time.sleep(2)
