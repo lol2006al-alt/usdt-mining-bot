@@ -44,7 +44,9 @@ def init_db():
             total_deposits REAL DEFAULT 0.0,
             games_counter INTEGER DEFAULT 0,
             last_daily_bonus TIMESTAMP,
-            registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            withdrawal_attempts INTEGER DEFAULT 0,
+            new_referrals_count INTEGER DEFAULT 0
         )
     ''')
     
@@ -91,6 +93,16 @@ def init_db():
         )
     ''')
     
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS withdrawal_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            attempt_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            referrals_before INTEGER DEFAULT 0,
+            FOREIGN KEY (user_id) REFERENCES users (user_id)
+        )
+    ''')
+    
     conn.commit()
     return conn
 
@@ -119,7 +131,9 @@ def get_user(user_id):
             'total_deposits': user[12],
             'games_counter': user[13],
             'last_daily_bonus': user[14],
-            'registration_date': user[15]
+            'registration_date': user[15],
+            'withdrawal_attempts': user[16],
+            'new_referrals_count': user[17]
         }
     return None
 
@@ -129,8 +143,8 @@ def save_user(user_data):
         INSERT OR REPLACE INTO users 
         (user_id, username, first_name, last_name, balance, referrals_count, 
          referrer_id, vip_level, vip_expiry, games_played_today, total_games_played, 
-         total_earned, total_deposits, games_counter, last_daily_bonus)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         total_earned, total_deposits, games_counter, last_daily_bonus, withdrawal_attempts, new_referrals_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         user_data['user_id'],
         user_data.get('username'),
@@ -146,7 +160,9 @@ def save_user(user_data):
         user_data.get('total_earned', 0.0),
         user_data.get('total_deposits', 0.0),
         user_data.get('games_counter', 0),
-        user_data.get('last_daily_bonus')
+        user_data.get('last_daily_bonus'),
+        user_data.get('withdrawal_attempts', 0),
+        user_data.get('new_referrals_count', 0)
     ))
     db_connection.commit()
 
@@ -187,6 +203,13 @@ def add_referral(referrer_id, referred_id):
                   (referrer_id, referred_id))
     cursor.execute("UPDATE users SET referrals_count = referrals_count + 1 WHERE user_id = ?", 
                   (referrer_id,))
+    
+    # ✅ تحديث الإحالات الجديدة إذا كان لديه محاولات سحب
+    cursor.execute("SELECT withdrawal_attempts FROM users WHERE user_id = ?", (referrer_id,))
+    result = cursor.fetchone()
+    if result and result[0] > 0:
+        cursor.execute("UPDATE users SET new_referrals_count = new_referrals_count + 1 WHERE user_id = ?", 
+                      (referrer_id,))
     
     # ✅ التصحيح: منع القيم السالبة في المحاولات
     cursor.execute("UPDATE users SET games_played_today = MAX(0, games_played_today - 1) WHERE user_id = ?", 
@@ -230,9 +253,9 @@ def create_main_menu():
         InlineKeyboardButton("💰 سحب رصيد", callback_data="withdraw")
     )
     keyboard.add(
-    InlineKeyboardButton("🆘 الدعم الفني", url="https://t.me/Trust_wallet_Support_3"),  # ✅ انتقل هنا
-    InlineKeyboardButton("💎 باقات VIP", callback_data="vip_packages")  # ✅ انتقل هنا
-)
+        InlineKeyboardButton("🆘 الدعم الفني", url="https://t.me/Trust_wallet_Support_3"),
+        InlineKeyboardButton("💎 باقات VIP", callback_data="vip_packages")
+    )
     return keyboard
 
 def create_games_menu():
@@ -251,53 +274,12 @@ def create_games_menu():
     )
     return keyboard
 
-def get_vip_details(level):
-    vip_data = {
-        "bronze": {
-            "name": "🟢 VIP برونزي",
-            "price": 5.0,
-            "mining_bonus": "+10% أرباح تعدين",
-            "daily_bonus": 0.5,
-            "features": [
-                "+10% أرباح تعدين",
-                "دعم سريع", 
-                "مهام إضافية",
-                "ألعاب حصرية"
-            ]
-        },
-        "silver": {
-            "name": "🔵 VIP فضى", 
-            "price": 10.0,
-            "mining_bonus": "+25% أرباح تعدين",
-            "daily_bonus": 1.0,
-            "features": [
-                "+25% أرباح تعدين",
-                "دعم مميز",
-                "مهام حصرية", 
-                "مكافآت يومية"
-            ]
-        },
-        "gold": {
-            "name": "🟡 VIP ذهبي",
-            "price": 20.0,
-            "mining_bonus": "+50% أرباح تعدين",
-            "daily_bonus": 2.0,
-            "features": [
-                "+50% أرباح تعدين",
-                "دعم فوري",
-                "مكافآت يومية",
-                "خصومات حصرية"
-            ]
-        }
-    }
-    return vip_data.get(level)
-
 def create_vip_keyboard():
     keyboard = InlineKeyboardMarkup(row_width=1)
-    keyboard.add(InlineKeyboardButton("🟢 VIP برونزي - 5.0 USDT", callback_data="vip_bronze"))
-    keyboard.add(InlineKeyboardButton("🔵 VIP فضى - 10.0 USDT", callback_data="vip_silver"))
-    keyboard.add(InlineKeyboardButton("🟡 VIP ذهبي - 20.0 USDT", callback_data="vip_gold"))
-    keyboard.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
+    keyboard.add(InlineKeyboardButton("🟢 برونزي - 5 USDT", callback_data="buy_bronze"))
+    keyboard.add(InlineKeyboardButton("🔵 فضى - 10 USDT", callback_data="buy_silver"))
+    keyboard.add(InlineKeyboardButton("🟡 ذهبي - 20 USDT", callback_data="buy_gold"))
+    keyboard.add(InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
     return keyboard
 
 def create_withdraw_keyboard():
@@ -308,7 +290,7 @@ def create_withdraw_keyboard():
 
 def create_referral_keyboard(user_id):
     keyboard = InlineKeyboardMarkup()
-    # ✅ إصلاح رابط الإحالة باستخدام يوزر البوت الصحيح
+    # ✅ رابط الإحالة الخاص بكل مستخدم
     referral_link = f"https://t.me/BNBMini1Bot?start={user_id}"
     
     keyboard.add(InlineKeyboardButton("📤 مشاركة الرابط", 
@@ -392,7 +374,9 @@ def start_command(message):
             'referrer_id': referrer_id,
             'balance': 0.0 + referral_bonus,
             'games_played_today': 3,
-            'total_deposits': 0.0
+            'total_deposits': 0.0,
+            'withdrawal_attempts': 0,
+            'new_referrals_count': 0
         }
         save_user(new_user)
         user = new_user
@@ -410,7 +394,7 @@ def start_command(message):
         welcome_text = f"""
         🎮 مرحباً بعودتك {message.from_user.first_name}!
 
-        💰 رصيدك: {user['balance']} USDT
+        💰 رصيدك: {user['balance']:.1f} USDT
         👥 عدد الإحالات: {user['referrals_count']}
         🎯 المحاولات المتبقية: {3 - user['games_played_today']}
         🏆 مستوى VIP: {user['vip_level']}
@@ -506,7 +490,7 @@ def handle_callbacks(call):
         
         save_user(user)
         
-        result_text += f"💰 **رصيدك الحالي: {user['balance']} USDT**\n"
+        result_text += f"💰 **رصيدك الحالي: {user['balance']:.1f} USDT**\n"
         result_text += f"🎯 **المحاولات المتبقية: {3 - user['games_played_today']}**"
         
         bot.edit_message_text(
@@ -517,38 +501,26 @@ def handle_callbacks(call):
             parse_mode='Markdown'
         )
 
-    # 🔧 قسم VIP المصحح - بداية الإصلاح
+    # 🎖️ نظام VIP المبسط والفعّال
     elif call.data == "vip_packages":
         try:
-            vip_text = """🎖️ *نظام العضويات VIP - ترقى لمستوى أفضل* 🎖️
+            vip_text = """
+🎖️ *باقات VIP المتاحة*
 
-اختر الباقة المناسبة وارتقِ بتجربتك:
+🟢 *برونزي* - 5 USDT
+• مكافأة يومية: 0.5 USDT
+• +10% أرباح تعدين
 
-*🟢 VIP برونزي*
-💵 السعر: 5.0 USDT
-📈 المكافأة: +10% أرباح تعدين  
-🎁 المكافأة اليومية: 0.5 USDT
+🔵 *فضى* - 10 USDT  
+• مكافأة يومية: 1.0 USDT
+• +25% أرباح تعدين
 
-*🔵 VIP فضى*
-💵 السعر: 10.0 USDT
-📈 المكافأة: +25% أرباح تعدين
-🎁 المكافأة اليومية: 1.0 USDT
+🟡 *ذهبي* - 20 USDT
+• مكافأة يومية: 2.0 USDT  
+• +50% أرباح تعدين
 
-*🟡 VIP ذهبي*
-💵 السعر: 20.0 USDT
-📈 المكافأة: +50% أرباح تعدين
-🎁 المكافأة اليومية: 2.0 USDT
-
-💎 *للشراء، أرسل USDT إلى عنوان المحفظة التالي على شبكة BEP20:*
-`0xfc712c9985507a2eb44df1ddfe7f09ff7613a19b`
-
-📝 *بعد الإيداع:*
-1. أرسل screenshot للتحويل إلى @Trust_wallet_Support_3
-2. اذكر نوع الباقة المطلوبة  
-3. انتظر التفعيل خلال 24 ساعة
-
-⚠️ *تأكد من استخدام شبكة BEP20 فقط!*"""
-
+اختر الباقة المناسبة:"""
+            
             bot.edit_message_text(
                 chat_id=call.message.chat.id,
                 message_id=call.message.message_id,
@@ -556,141 +528,123 @@ def handle_callbacks(call):
                 reply_markup=create_vip_keyboard(),
                 parse_mode='Markdown'
             )
+            bot.answer_callback_query(call.id, "🎖️")
         except Exception as e:
-            print(f"خطأ في زر VIP: {e}")
-            bot.answer_callback_query(call.id, "❌ حدث خطأ، حاول مرة أخرى")
-    
-    elif call.data.startswith("vip_"):
-        vip_type = call.data.replace("vip_", "")
-        vip_info = get_vip_details(vip_type)
+            print(f"خطأ في VIP: {e}")
+            bot.answer_callback_query(call.id, "❌ حدث خطأ")
+
+    elif call.data.startswith("buy_"):
+        vip_type = call.data.replace("buy_", "")
+        prices = {"bronze": 5.0, "silver": 10.0, "gold": 20.0}
+        names = {"bronze": "🟢 برونزي", "silver": "🔵 فضى", "gold": "🟡 ذهبي"}
         
-        if not vip_info:
+        price = prices.get(vip_type)
+        name = names.get(vip_type)
+        
+        if not price:
             bot.answer_callback_query(call.id, "❌ نوع VIP غير صحيح")
             return
         
-        if user['balance'] < vip_info['price']:
-            bot.answer_callback_query(call.id, f"❌ رصيدك غير كافٍ! السعر: {vip_info['price']} USDT")
-            return
-        
-        confirmation_text = f"""
-        🎖️ **تأكيد شراء {vip_info['name']}**
+        if user['balance'] >= price:
+            user['balance'] -= price
+            user['vip_level'] = {"bronze": 1, "silver": 2, "gold": 3}[vip_type]
+            user['vip_expiry'] = (datetime.now() + timedelta(days=30)).isoformat()
+            save_user(user)
+            
+            success_msg = f"""
+🎉 *تم تفعيل {name} بنجاح!*
 
-        💵 **السعر:** {vip_info['price']} USDT
-        📈 **المكافأة:** {vip_info['mining_bonus']}
-        🎁 **المكافأة اليومية:** {vip_info['daily_bonus']} USDT
+💰 تم خصم {price} USDT
+💎 رصيدك الجديد: {user['balance']:.1f} USDT
 
-        ⭐ **المزايا:**
-        {chr(10).join(['   • ' + feature for feature in vip_info['features']])}
-
-        💰 **رصيدك الحالي:** {user['balance']} USDT
-        💎 **الرصيد بعد الشراء:** {user['balance'] - vip_info['price']} USDT
-
-        ✅ **هل تريد المتابعة؟**
-        """
-        
-        keyboard = InlineKeyboardMarkup()
-        keyboard.add(
-            InlineKeyboardButton("✅ تأكيد الشراء", callback_data=f"confirm_vip_{vip_type}"),
-            InlineKeyboardButton("❌ إلغاء", callback_data="vip_packages")
-        )
-        
-        bot.edit_message_text(
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            text=confirmation_text,
-            reply_markup=keyboard,
-            parse_mode='Markdown'
-        )
-    
-    elif call.data.startswith("confirm_vip_"):
-        vip_type = call.data.replace("confirm_vip_", "")
-        vip_info = get_vip_details(vip_type)
-        
-        if not vip_info:
-            bot.answer_callback_query(call.id, "❌ نوع VIP غير صحيح")
-            return
-        
-        # خصم السعر من الرصيد
-        user['balance'] -= vip_info['price']
-        
-        # تعيين مستوى VIP
-        vip_levels = {"bronze": 1, "silver": 2, "gold": 3}
-        user['vip_level'] = vip_levels.get(vip_type, 1)
-        
-        # تعيين تاريخ انتهاء VIP (30 يوم)
-        user['vip_expiry'] = (datetime.now() + timedelta(days=30)).isoformat()
-        user['last_daily_bonus'] = datetime.now().isoformat()
-        
-        save_user(user)
-        
-        success_text = f"""
-        🎉 **تم تفعيل {vip_info['name']} بنجاح!**
-
-        💎 **المزايا المفعلة:**
-        📈 {vip_info['mining_bonus']}
-        🎁 مكافأة يومية: {vip_info['daily_bonus']} USDT
-        ⭐ {chr(10).join(['• ' + feature for feature in vip_info['features']])}
-
-        💰 **رصيدك الحالي:** {user['balance']} USDT
-        🚀 **سيتم إيداع المكافأة اليومية تلقائياً!**
-
-        **استمتع بالمزايا الحصرية! 🏆**
-        """
-        
-        bot.edit_message_text(
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            text=success_text,
-            reply_markup=create_main_menu(),
-            parse_mode='Markdown'
-        )
-        
-        bot.answer_callback_query(call.id, f"✅ تم تفعيل {vip_info['name']} بنجاح!")
-    # 🔧 قسم VIP المصحح - نهاية الإصلاح
-    
-    elif call.data == "withdraw":
-        if user['balance'] < 100.0:
-            bot.answer_callback_query(
-                call.id, 
-                f"❌ الحد الأدنى للسحب 100 USDT! رصيدك: {user['balance']} USDT"
+⭐ تم تفعيل المزايا الحصرية
+استمتع! 🏆"""
+            
+            bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text=success_msg,
+                reply_markup=create_main_menu(),
+                parse_mode='Markdown'
             )
-            return
+        else:
+            bot.answer_callback_query(call.id, f"❌ رصيدك غير كافٍ! تحتاج {price} USDT")
+
+    # 💰 نظام السحب مع الشروط الجديدة
+    elif call.data == "withdraw":
+        # ✅ تسجيل محاولة السحب الأولى
+        if user['withdrawal_attempts'] == 0:
+            user['withdrawal_attempts'] = 1
+            save_user(user)
+            
+            # تسجيل محاولة السحب في جدول منفصل
+            cursor = db_connection.cursor()
+            cursor.execute(
+                "INSERT INTO withdrawal_attempts (user_id, referrals_before) VALUES (?, ?)",
+                (user_id, user['referrals_count'])
+            )
+            db_connection.commit()
+
+        # ✅ التحقق من الشروط
+        error_messages = []
+        
+        if user['balance'] < 100.0:
+            error_messages.append(f"❌ الرصيد: {user['balance']:.1f}/100 USDT")
         
         if user['total_deposits'] < 10.0:
-            bot.answer_callback_query(
-                call.id,
-                f"❌ يجب أن تكون قد أودعت 10 USDT على الأقل للسحب!\n"
-                f"💰 إيداعاتك الحالية: {user['total_deposits']} USDT"
+            error_messages.append(f"❌ الإيداعات: {user['total_deposits']:.1f}/10 USDT")
+        
+        # ✅ حساب الإحالات المطلوبة بعد أول محاولة سحب
+        required_new_referrals = 10
+        if user['withdrawal_attempts'] > 0:
+            cursor = db_connection.cursor()
+            cursor.execute("SELECT referrals_before FROM withdrawal_attempts WHERE user_id = ? ORDER BY attempt_date LIMIT 1", (user_id,))
+            result = cursor.fetchone()
+            if result:
+                referrals_before = result[0]
+                current_referrals = user['referrals_count']
+                new_referrals = current_referrals - referrals_before
+                
+                if new_referrals < required_new_referrals:
+                    error_messages.append(f"❌ الإحالات الجديدة: {new_referrals}/10")
+            else:
+                error_messages.append(f"❌ الإحالات الجديدة: 0/10")
+        
+        # ✅ إذا كان هناك أخطاء، عرضها
+        if error_messages:
+            error_text = "💳 *شروط السحب غير مكتملة:*\n\n" + "\n".join(error_messages)
+            error_text += f"\n\n📊 *إحصائياتك:*\n💰 الرصيد: {user['balance']:.1f} USDT\n💳 الإيداعات: {user['total_deposits']:.1f} USDT\n👥 الإحالات: {user['referrals_count']}"
+            
+            bot.answer_callback_query(call.id, "❌ شروط السحب غير مكتملة")
+            bot.send_message(
+                call.message.chat.id,
+                error_text,
+                parse_mode='Markdown'
             )
             return
         
+        # ✅ إذا اجتاز جميع الشروط، عرض صفحة السحب
         withdraw_text = f"""
-        💰 **طلب سحب رصيد**
+💰 **طلب سحب رصيد**
 
-        ✅ **الشروط المطلوبة:**
-        💳 الرصيد المتاح: {user['balance']} USDT ✓
-        📋 الحد الأدنى للسحب: 100 USDT ✓
-        💎 إجمالي الإيداعات: {user['total_deposits']} USDT ✓
+✅ **تم استيفاء جميع الشروط:**
+💳 الرصيد: {user['balance']:.1f} USDT ✓
+💰 الإيداعات: {user['total_deposits']:.1f} USDT ✓  
+👥 الإحالات الجديدة: 10/10 ✓
 
-        🔴 **⚠️ تنبيه أمني مهم:**
-        **يجب أن يكون الإيداع على شبكة BEP20 فقط!**
-        
-        • تأكد من اختيار شبكة BEP20 عند الإرسال
-        • لا ترسل على شبكة ERC20 أو غيرها
-        • الأموال المرسلة على الشبكات الخاطئة **ستضيع ولا يمكن استرجاعها**
+🔴 **⚠️ تنبيه أمني مهم:**
+**يجب أن يكون الإيداع على شبكة BEP20 فقط!**
 
-        💎 **عنوان المحفظة (BEP20 فقط):**
-        `0xfc712c9985507a2eb44df1ddfe7f09ff7613a19b`
+💎 **عنوان المحفظة (BEP20 فقط):**
+`0xfc712c9985507a2eb44df1ddfe7f09ff7613a19b`
 
-        📝 **للسحب يرجى إرسال:**
-        1. المبلغ المطلوب (100 USDT minimum)
-        2. عنوان محفظتك (للتأكد)
-        3. screenshot من التحويل
-        4. تأكيد أنك استخدمت شبكة BEP20
+📝 **للسحب يرجى إرسال:**
+1. المبلغ المطلوب (100 USDT حد أدنى)
+2. عنوان محفظتك
+3. screenshot من التحويل
+4. تأكيد استخدام شبكة BEP20
 
-        ⏰ **مدة المعالجة:** 24-48 ساعة
-        🔒 **عمولة الشبكة:** يتحملها المستخدم
-        """
+⏰ **مدة المعالجة:** 24-48 ساعة"""
 
         bot.edit_message_text(
             chat_id=call.message.chat.id,
@@ -702,21 +656,21 @@ def handle_callbacks(call):
     
     elif call.data == "confirm_bep20":
         confirmation_text = """
-        ✅ **تم تأكيد فهمك لشروط الأمان**
+✅ **تم تأكيد فهمك لشروط الأمان**
 
-        🛡️ **لقد فهمت أن:**
-        • الإيداع يجب أن يكون على شبكة BEP20 فقط
-        • الأموال المرسلة على شبكات أخرى **ستضيع**
-        • العمولة على الشبكة تتحملها أنت
+🛡️ **لقد فهمت أن:**
+• الإيداع يجب أن يكون على شبكة BEP20 فقط
+• الأموال المرسلة على شبكات أخرى **ستضيع**
+• العمولة على الشبكة تتحملها أنت
 
-        💰 **للإيداع الآمن:**
-        1. اختر شبكة BEP20 في محفظتك
-        2. تأكد من العنوان بشكل دقيق
-        3. أرسل المبلغ المطلوب
-        4. احتفظ بـ screenshot للتحويل
+💰 **للإيداع الآمن:**
+1. اختر شبكة BEP20 في محفظتك
+2. تأكد من العنوان بشكل دقيق
+3. أرسل المبلغ المطلوب
+4. احتفظ بـ screenshot للتحويل
 
-        📞 **للطوارئ أو الأسئلة:**
-        @Trust_wallet_Support_3
+📞 **للطوارئ أو الأسئلة:**
+@Trust_wallet_Support_3
         """
 
         bot.edit_message_text(
@@ -729,22 +683,22 @@ def handle_callbacks(call):
     elif call.data == "referral":
         keyboard, referral_link = create_referral_keyboard(user_id)
         referral_text = f"""
-        👥 **نظام الإحالات**
+👥 **نظام الإحالات**
 
-        🔗 **رابط الدعوة الخاص بك:**
-        `{referral_link}`
+🔗 **رابط الدعوة الخاص بك:**
+`{referral_link}`
 
-        💰 **مكافآت الإحالة:**
-        • أنت تحصل على 1.0 USDT
-        • صديقك يحصل على 1.0 USDT  
-        • تحصل على محاولة لعب إضافية
+💰 **مكافآت الإحالة:**
+• أنت تحصل على 1.0 USDT
+• صديقك يحصل على 1.0 USDT  
+• تحصل على محاولة لعب إضافية
 
-        📊 **إحصائياتك:**
-        👥 عدد الإحالات: {user['referrals_count']}
-        💰 أرباح الإحالات: {user['referrals_count'] * 1.0} USDT
-        🎯 محاولات إضافية: {user['referrals_count']}
+📊 **إحصائياتك:**
+👥 عدد الإحالات: {user['referrals_count']}
+💰 أرباح الإحالات: {user['referrals_count'] * 1.0} USDT
+🎯 محاولات إضافية: {user['referrals_count']}
 
-        🎯 **كل إحالة = 1 USDT + محاولة لعب إضافية!**
+🎯 **كل إحالة = 1 USDT + محاولة لعب إضافية!**
         """
         bot.edit_message_text(
             chat_id=call.message.chat.id,
@@ -781,18 +735,31 @@ def handle_callbacks(call):
     
     elif call.data == "profile":
         remaining_games = 3 - user['games_played_today']
+        
+        # ✅ حساب الإحالات الجديدة المطلوبة للسحب
+        new_referrals_info = ""
+        if user['withdrawal_attempts'] > 0:
+            cursor = db_connection.cursor()
+            cursor.execute("SELECT referrals_before FROM withdrawal_attempts WHERE user_id = ? ORDER BY attempt_date LIMIT 1", (user_id,))
+            result = cursor.fetchone()
+            if result:
+                referrals_before = result[0]
+                current_referrals = user['referrals_count']
+                new_referrals = current_referrals - referrals_before
+                new_referrals_info = f"📈 **الإحالات الجديدة:** {new_referrals}/10\n"
+        
         profile_text = f"""
-        📊 **الملف الشخصي**
+📊 **الملف الشخصي**
 
-        👤 **المستخدم:** {user['first_name']} {user.get('last_name', '')}
-        🆔 **المعرف:** `{user_id}`
-        💰 **الرصيد:** {user['balance']} USDT
-        👥 **الإحالات:** {user['referrals_count']} مستخدم
-        🏆 **مستوى VIP:** {user['vip_level']}
-        🎯 **المحاولات المتبقية:** {remaining_games}/3
-        💎 **إجمالي الأرباح:** {user['total_earned']} USDT
-        💳 **إجمالي الإيداعات:** {user['total_deposits']} USDT
-        📅 **تاريخ التسجيل:** {user['registration_date'][:10]}
+👤 **المستخدم:** {user['first_name']} {user.get('last_name', '')}
+🆔 **المعرف:** `{user_id}`
+💰 **الرصيد:** {user['balance']:.1f} USDT
+👥 **الإحالات:** {user['referrals_count']} مستخدم
+{new_referrals_info}🏆 **مستوى VIP:** {user['vip_level']}
+🎯 **المحاولات المتبقية:** {remaining_games}/3
+💎 **إجمالي الأرباح:** {user['total_earned']:.1f} USDT
+💳 **إجمالي الإيداعات:** {user['total_deposits']:.1f} USDT
+📅 **تاريخ التسجيل:** {user['registration_date'][:10]}
         """
         keyboard = InlineKeyboardMarkup()
         keyboard.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
@@ -836,16 +803,16 @@ def add_balance_admin(message):
         bot.send_message(
             message.chat.id, 
             f"✅ تم إضافة {amount} USDT للمستخدم {target_user_id}\n"
-            f"💰 الرصيد الجديد: {target_user['balance']} USDT\n"
-            f"💳 إجمالي الإيداعات: {target_user['total_deposits']} USDT"
+            f"💰 الرصيد الجديد: {target_user['balance']:.1f} USDT\n"
+            f"💳 إجمالي الإيداعات: {target_user['total_deposits']:.1f} USDT"
         )
         
         try:
             bot.send_message(
                 target_user_id,
                 f"🎉 تم إضافة {amount} USDT إلى رصيدك!\n"
-                f"💰 رصيدك الحالي: {target_user['balance']} USDT\n"
-                f"💳 إجمالي إيداعاتك: {target_user['total_deposits']} USDT"
+                f"💰 رصيدك الحالي: {target_user['balance']:.1f} USDT\n"
+                f"💳 إجمالي إيداعاتك: {target_user['total_deposits']:.1f} USDT"
             )
         except:
             pass
@@ -877,8 +844,8 @@ def set_balance_admin(message):
             bot.send_message(
                 message.chat.id, 
                 f"✅ تم تعيين رصيد المستخدم {target_user_id}\n"
-                f"📊 الرصيد السابق: {old_balance} USDT\n"
-                f"💰 الرصيد الجديد: {amount} USDT"
+                f"📊 الرصيد السابق: {old_balance:.1f} USDT\n"
+                f"💰 الرصيد الجديد: {amount:.1f} USDT"
             )
         else:
             bot.send_message(message.chat.id, "❌ المستخدم غير موجود!")
@@ -908,12 +875,12 @@ def userinfo_admin(message):
 🆔 **الآيدي:** `{user['user_id']}`
 👤 **الاسم:** {user['first_name']} {user.get('last_name', '')}
 📛 **اليوزرنيم:** @{user.get('username', 'غير متوفر')}
-💰 **الرصيد:** {user['balance']} USDT
+💰 **الرصيد:** {user['balance']:.1f} USDT
 👥 **الإحالات:** {user['referrals_count']}
 🏆 **مستوى VIP:** {user['vip_level']}
 🎯 **المحاولات المتبقية:** {remaining_games}/3
-💎 **إجمالي الأرباح:** {user['total_earned']} USDT
-💳 **إجمالي الإيداعات:** {user['total_deposits']} USDT
+💎 **إجمالي الأرباح:** {user['total_earned']:.1f} USDT
+💳 **إجمالي الإيداعات:** {user['total_deposits']:.1f} USDT
 📅 **تاريخ التسجيل:** {user['registration_date'][:10]}
 """
             bot.send_message(message.chat.id, info_text, parse_mode='Markdown')
@@ -963,7 +930,7 @@ def health_check():
             "timestamp": datetime.now().isoformat(),
             "total_users": total_users,
             "total_referrals": total_referrals,
-            "version": "6.0",
+            "version": "7.0",
             "performance": "excellent"
         }
     except Exception as e:
