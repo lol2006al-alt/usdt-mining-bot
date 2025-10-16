@@ -352,7 +352,6 @@ def callbacks(c):
             kb = withdraw_kb(user)
             bot.edit_message_text(chat_id=c.message.chat.id, message_id=c.message.message_id, text=f"💰 سحب الرصيد\n• الحد الأدنى: {MIN_WITHDRAW_BALANCE} USDT\n• إحالات مطلوبة: {MIN_WITHDRAW_REFERRALS}\n• نشاط 7 أيام متتالية\n• إما إيداع ≥ {MIN_DEPOSIT_FOR_WITHDRAW} أو باقة فضية", reply_markup=kb)
 
-            bot.set_my_commands([telebot.types.BotCommand("start", "بدء الاستخدام")])
 
         elif c.data == "withdraw_info":
             bot.answer_callback_query(c.id, f"السحب: لازم {MIN_WITHDRAW_BALANCE} USDT + {MIN_WITHDRAW_REFERRALS} إحالة + 7 أيام نشاط + (إيداع ≥ {MIN_DEPOSIT_FOR_WITHDRAW} أو باقة فضية). بديل: دعوة {ALT_REFERRAL_GOAL} أشخاص إذا رصيدك ≥ {MIN_WITHDRAW_BALANCE}", show_alert=True)
