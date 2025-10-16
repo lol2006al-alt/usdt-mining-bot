@@ -1,41 +1,43 @@
+# app.py (FINAL)
+# جاهز للنسخ-اللصق على Render
+# يحوي: حفظ بيانات في database.json، الألعاب، الإحالات، VIP، شروط السحب، أوامر المدير بالعربية.
+
 from flask import Flask, request
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import os, json, time, tempfile, threading, random
 from datetime import datetime, timedelta
 
-# ---------------- CONFIG ----------------
-BOT_TOKEN = "8385331860:AAHj0uPnpJf_JYtHjALIkmavsBNnpa_Gd2Y"   # <-- ضع هنا توكن البوت
-ADMIN_ID = 8400225549                   # <-- معرف الأدمن (قم بتعديله إن لزم)
-SUPPORT_USERNAME = "Trust_wallet_Support_3"  # يوزر البيع/دفع الباقات
+# ---------------- CONFIG (لا تغير) ----------------
+BOT_TOKEN = "8385331860:AAHj0uPnpJf_JYtHjALIkmavsBNnpa_Gd2Y"
+ADMIN_ID = 8400225549
+SUPPORT_USERNAME = "Trust_wallet_Support_3"
 DATA_FILE = "database.json"
-AUTOSAVE_INTERVAL = 60  # ثواني
-WEBHOOK_BASE = "https://usdt-bot-live.onrender.com"  # رابط مشروعك على Render
+AUTOSAVE_INTERVAL = 60
+WEBHOOK_BASE = "https://usdt-bot-live.onrender.com"
 
-# قواعد العمل
-MIN_WITHDRAW_BALANCE = 100.0   # شرط رصيد للسحب
-MIN_WITHDRAW_REFERRALS = 15    # شرط إحالات للسحب
-MIN_DEPOSIT_FOR_WITHDRAW = 10.0  # إيداع 10 عملات شرط للسحب (أو شراء باقة فضية)
-ALT_REFERRAL_GOAL = 10         # الخيار المخفي: دعوة 10 أشخاص
+MIN_WITHDRAW_BALANCE = 100.0
+MIN_WITHDRAW_REFERRALS = 15
+MIN_DEPOSIT_FOR_WITHDRAW = 10.0   # إما إيداع >= 10 أو باقة فضية
+ALT_REFERRAL_GOAL = 10
 DAILY_TRIES = 3
 REFERRAL_BONUS_AMOUNT = 0.75
 REFERRAL_BONUS_TRY = 1
-
-# ----------------------------------------
+# -------------------------------------------------
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
-# ---------- in-memory mirror and lock ----------
+# in-memory mirror
 data = {
-    "users": {},        # keyed by str(user_id)
-    "referrals": [],    # list of {referrer_id, referred_id, timestamp}
+    "users": {},
+    "referrals": [],
     "backups": [],
     "transactions": []
 }
 _lock = threading.Lock()
 
-# ---------- atomic file helpers ----------
+# ---------- atomic write helpers ----------
 def atomic_write(path, content):
     fd, tmp = tempfile.mkstemp(dir=".", prefix=".tmpdb_")
     try:
@@ -59,7 +61,7 @@ def load_data():
                     data = loaded
                     print(f"✅ Loaded {DATA_FILE}")
         except Exception as e:
-            print(f"❌ load_data error: {e}")
+            print("❌ load_data error:", e)
     else:
         save_data()
 
@@ -70,7 +72,7 @@ def save_data():
             print(f"✅ Saved {DATA_FILE} at {datetime.utcnow().isoformat()}")
             return True
         except Exception as e:
-            print(f"❌ save_data error: {e}")
+            print("❌ save_data error:", e)
             return False
 
 def autosave_loop():
@@ -78,7 +80,7 @@ def autosave_loop():
         time.sleep(AUTOSAVE_INTERVAL)
         save_data()
 
-# ---------- user helpers ----------
+# ---------- users helpers ----------
 def ensure_user(uid):
     uid = str(uid)
     with _lock:
@@ -147,13 +149,12 @@ def add_referral(referrer_id, referred_id):
         ref["referrals_count"] = ref.get("referrals_count", 0) + 1
         ref["daily_trie_quota"] = ref.get("daily_trie_quota", 0) + REFERRAL_BONUS_TRY
         add_balance(referrer_id, REFERRAL_BONUS_AMOUNT, f"Referral bonus for {referred_id}")
-        # small join bonus to referred
         add_balance(referred_id, 0.75, "Join referral bonus")
         ref["new_referrals_count"] = ref.get("new_referrals_count", 0) + 1
         save_data()
     return True
 
-# ---------- daily tries / activity ----------
+# ---------- daily quota & active days ----------
 def ensure_daily_quota(user):
     now = datetime.utcnow()
     last = user.get("last_daily_reset")
@@ -168,11 +169,9 @@ def ensure_daily_quota(user):
         except:
             assign = True
     if assign:
-        # grant base tries
         user["daily_trie_quota"] = user.get("daily_trie_quota", 0) + DAILY_TRIES
         user["games_played_today"] = 0
         user["last_daily_reset"] = now.isoformat()
-        # active days streak update
         last_active = user.get("last_active_date")
         today = now.date()
         if last_active:
@@ -231,8 +230,7 @@ def games_menu_kb():
 def vip_kb():
     kb = InlineKeyboardMarkup(row_width=1)
     support_url = f"https://t.me/{SUPPORT_USERNAME}"
-    # each button includes short description + purchase link
-    kb.add(InlineKeyboardButton("🟢 برونزي - 5 USDT\n• مزايا: محاولات إضافية غير مباشرة", url=support_url))
+    kb.add(InlineKeyboardButton("🟢 برونزي - 5 USDT\n• مزايا: محاولات إضافية", url=support_url))
     kb.add(InlineKeyboardButton("🔵 فضي - 10 USDT\n• مزايا: إلغاء شرط الإيداع للسحب", url=support_url))
     kb.add(InlineKeyboardButton("🟡 ذهبي - 20 USDT\n• مزايا: مكافآت أعلى وأولوية دعم", url=support_url))
     kb.add(InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
@@ -302,7 +300,7 @@ def play_darts_game(user_id):
         s=random.randint(10,50); scores.append(f"🎯 نقاط: {s}"); total+=s
     return scores, total/50.0
 
-# ---------- helper for mining ETA ----------
+# ---------- helpers ----------
 def next_mining_eta(user):
     last = user.get("last_daily_reset")
     if not last:
@@ -328,9 +326,8 @@ def callbacks(c):
     except Exception as e:
         print("ensure_daily_quota error:", e)
     changed = False
-
     try:
-        if c.data == "main_menu":
+        if c.data == "profile" or c.data == "main_menu":
             remaining = user_remaining_tries(user)
             vip_name = {0:"عادي",1:"برونزي",2:"فضي",3:"ذهبي"}.get(user.get("vip_level",0),"عادي")
             txt = (f"📊 الملف الشخصي\n\n👤 المستخدم: {user.get('username') or ('User '+str(uid))}\n"
@@ -345,16 +342,10 @@ def callbacks(c):
                    f"📅 النشاط المستمر: {user.get('active_days_streak',0)}/7 أيام")
             bot.edit_message_text(chat_id=c.message.chat.id, message_id=c.message.message_id, text=txt, reply_markup=main_menu_kb())
 
-        elif c.data == "profile":
-            bot.answer_callback_query(c.id, "فتح الملف الشخصي...", show_alert=False)
-            # reuse main menu display
-            bot.edit_message_text(chat_id=c.message.chat.id, message_id=c.message.message_id, text="جاري التحميل...", reply_markup=main_menu_kb())
-
         elif c.data == "games_menu":
             bot.edit_message_text(chat_id=c.message.chat.id, message_id=c.message.message_id, text="🎮 اختر لعبة:", reply_markup=games_menu_kb())
 
         elif c.data == "vip_packages":
-            # show VIP with purchase link to support
             bot.edit_message_text(chat_id=c.message.chat.id, message_id=c.message.message_id, text="💎 باقات VIP", reply_markup=vip_kb())
 
         elif c.data == "referral":
@@ -384,7 +375,6 @@ def callbacks(c):
                 user["withdrawal_attempts"] = user.get("withdrawal_attempts",0) + 1
                 save_user(user)
                 bot.answer_callback_query(c.id, "✅ تم تقديم طلب السحب، جاري إشعار الأدمن", show_alert=True)
-                # notify admin
                 try:
                     bot.send_message(ADMIN_ID, f"📥 طلب سحب جديد:\n• user_id: {uid}\n• balance: {user.get('balance'):.2f} USDT\n• referrals: {user.get('referrals_count')}\n• active_days: {user.get('active_days_streak')}\n• vip_level: {user.get('vip_level')}\n• total_deposits: {user.get('total_deposits'):.2f}")
                 except Exception as e:
@@ -438,9 +428,6 @@ def callbacks(c):
 
         elif c.data == "my_referrals":
             bot.answer_callback_query(c.id, f"📊 لديك {user.get('referrals_count',0)} إحالات", show_alert=True)
-
-        elif c.data == "main_menu":
-            bot.edit_message_text(chat_id=c.message.chat.id, message_id=c.message.message_id, text="🔙 القائمة الرئيسية", reply_markup=main_menu_kb())
 
         else:
             bot.answer_callback_query(c.id, "✅", show_alert=False)
@@ -603,7 +590,7 @@ def cmd_بث(m):
             except: pass
     bot.reply_to(m, f"📤 تم الإرسال لـ {sent} مستخدم")
 
-# ---------- fallback ----------
+# fallback
 @bot.message_handler(func=lambda m: True)
 def catch_all(m):
     u = ensure_user(m.from_user.id)
@@ -620,7 +607,7 @@ def index():
 def webhook_endpoint():
     if request.headers.get("content-type") == "application/json":
         try:
-            update = telebot.types.Update.de_json(request.data.decode("utf-8"))
+            update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
             bot.process_new_updates([update])
             return "OK", 200
         except Exception as e:
