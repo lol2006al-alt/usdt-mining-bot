@@ -2,52 +2,47 @@
 from flask import Flask, request
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-import os
-import random
-import json
-import time
+import os, random, json, time, tempfile, threading
 from datetime import datetime, timedelta
-import threading
-import tempfile
 
-# -------------------------
-# CONFIG
-# -------------------------
+# ------------- CONFIG -------------
 BOT_TOKEN = "8385331860:AAHj0uPnpJf_JYtHjALIkmavsBNnpa_Gd2Y"
-ADMIN_ID = 8400225549  # الايدي تبعك
-WALLET_ADDRESS = "0xfc712c9985507a2eb44df1ddfe7f09ff7613a19b"  # مجرد عرض، لا عمليات مالية من الكود
+ADMIN_ID = 8400225549
+SUPPORT_USERNAME = "Trust_wallet_Support_3"  # زر الشراء يفتح هذا اليوزر
 DATA_FILE = "database.json"
-AUTOSAVE_INTERVAL = 60  # ثانية: كل كم يحفظ تلقائياً
+AUTOSAVE_INTERVAL = 60  # seconds
+MIN_WITHDRAW_BALANCE = 100.0
+MIN_WITHDRAW_REFERRALS = 15
+ALT_REFERRAL_GOAL = 10  # الخيار المخفي: دعوة 10 أشخاص
+DAILY_TRIES = 3
+REFERRAL_BONUS_AMOUNT = 0.75
+REFERRAL_BONUS_TRY = 1
+# ----------------------------------
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
-# -------------------------
-# In-memory mirror to file
-# -------------------------
+# In-memory data (mirror of DATA_FILE)
 data = {
-    "users": {},        # user_id (str) -> user object
-    "referrals": [],    # list of referral dicts
-    "backups": [],      # metadata backups
-    "transactions": []  # operations log (رمزي)
+    "users": {},        # key: str(user_id)
+    "referrals": [],    # list of {referrer_id, referred_id, timestamp}
+    "backups": [],
+    "transactions": []
 }
+_lock = threading.Lock()
 
-lock = threading.Lock()
-
-# -------------------------
-# Atomic file write helpers
-# -------------------------
+# ---------- atomic file helpers ----------
 def atomic_write(path, content):
-    fd, tmp_path = tempfile.mkstemp(dir=".", prefix=".tmpdb_")
+    fd, tmp = tempfile.mkstemp(dir=".", prefix=".tmpdb_")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(content)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp_path, path)
+        os.replace(tmp, path)
     except Exception:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
+        if os.path.exists(tmp):
+            os.remove(tmp)
         raise
 
 def load_data():
@@ -58,34 +53,32 @@ def load_data():
                 loaded = json.load(f)
                 if isinstance(loaded, dict):
                     data = loaded
-                    print(f"✅ Loaded data from {DATA_FILE}")
+                    print(f"✅ Loaded {DATA_FILE}")
         except Exception as e:
-            print(f"❌ Failed to load {DATA_FILE}: {e}")
+            print(f"❌ load_data error: {e}")
     else:
-        save_data()  # create file
+        save_data()
 
 def save_data():
-    with lock:
+    with _lock:
         try:
             atomic_write(DATA_FILE, json.dumps(data, ensure_ascii=False, indent=2))
-            # print timestamp for debug
-            print(f"✅ Saved data to {DATA_FILE} at {datetime.now().isoformat()}")
+            # print timestamp
+            print(f"✅ Saved {DATA_FILE} at {datetime.now().isoformat()}")
             return True
         except Exception as e:
-            print(f"❌ Error saving data: {e}")
+            print(f"❌ save_data error: {e}")
             return False
 
-def autosave_worker():
+def autosave_loop():
     while True:
         time.sleep(AUTOSAVE_INTERVAL)
         save_data()
 
-# -------------------------
-# Data helpers
-# -------------------------
-def get_user(user_id):
-    uid = str(user_id)
-    with lock:
+# ---------- user helpers ----------
+def ensure_user(uid):
+    uid = str(uid)
+    with _lock:
         if uid not in data["users"]:
             data["users"][uid] = {
                 "user_id": int(uid),
@@ -102,96 +95,141 @@ def get_user(user_id):
                 "total_earned": 0.0,
                 "total_deposits": 0.0,
                 "games_counter": 0,
-                "last_daily_bonus": None,
+                "last_daily_reset": None,    # ISO timestamp when daily tries last assigned
+                "daily_trie_quota": 0,      # assigned today base tries
                 "withdrawal_attempts": 0,
                 "new_referrals_count": 0,
-                "lang": "ar",
+                "active_days_streak": 0,    # consecutive active days
+                "last_active_date": None,   # ISO of last day seen
+                "registration_date": datetime.now().date().isoformat(),
                 "banned": False,
-                "registration_date": datetime.now().isoformat()
+                "total_profits": 0.0
             }
             save_data()
         return data["users"][uid]
 
-def save_user(user_obj):
-    with lock:
-        data["users"][str(user_obj["user_id"])] = user_obj
+def save_user(user):
+    with _lock:
+        data["users"][str(user["user_id"])] = user
         save_data()
-    return True
 
-def add_balance(user_id, amount, description="", is_deposit=False):
-    user = get_user(user_id)
-    user["balance"] = round(user.get("balance", 0.0) + float(amount), 8)
-    user["total_earned"] = round(user.get("total_earned", 0.0) + float(amount), 8)
-    if is_deposit:
-        user["total_deposits"] = round(user.get("total_deposits", 0.0) + float(amount), 8)
-    with lock:
-        data["transactions"].append({
-            "user_id": int(user_id),
-            "type": "deposit" if is_deposit else "bonus",
-            "amount": float(amount),
-            "description": description,
-            "timestamp": datetime.now().isoformat()
-        })
-        save_data()
-    return True
+def add_balance(uid, amount, desc=""):
+    u = ensure_user(uid)
+    u["balance"] = round(u.get("balance", 0.0) + float(amount), 8)
+    u["total_earned"] = round(u.get("total_earned", 0.0) + float(amount), 8)
+    u["total_profits"] = round(u.get("total_profits", 0.0) + float(amount), 8)
+    if float(amount) > 0:
+        with _lock:
+            data["transactions"].append({
+                "user_id": int(uid),
+                "amount": float(amount),
+                "description": desc,
+                "timestamp": datetime.now().isoformat()
+            })
+            save_data()
+    return u
 
 def add_referral(referrer_id, referred_id):
     if int(referrer_id) == int(referred_id):
         return False
-    with lock:
+    with _lock:
         for r in data["referrals"]:
             if r["referrer_id"] == int(referrer_id) and r["referred_id"] == int(referred_id):
                 return False
         data["referrals"].append({
             "referrer_id": int(referrer_id),
             "referred_id": int(referred_id),
-            "bonus_given": True,
             "timestamp": datetime.now().isoformat()
         })
-        ref = get_user(referrer_id)
+        # apply rewards
+        ref = ensure_user(referrer_id)
         ref["referrals_count"] = ref.get("referrals_count", 0) + 1
-        add_balance(referrer_id, 1.0, f"Referral bonus for {referred_id}")
-        add_balance(referred_id, 1.0, "Referral join bonus")
-        ref["games_played_today"] = max(0, ref.get("games_played_today", 0) - 1)
+        # give +1 try and +0.75 balance
+        ref["daily_trie_quota"] = ref.get("daily_trie_quota", 0) + REFERRAL_BONUS_TRY
+        add_balance(referrer_id, REFERRAL_BONUS_AMOUNT, f"Referral bonus for {referred_id}")
+        # for referred: small join bonus
+        add_balance(referred_id, 0.75, "Join referral bonus")
+        # increment counters
+        ref["new_referrals_count"] = ref.get("new_referrals_count", 0) + 1
+        # adjust games_played_today allowance (we model as quota, not decrement)
         save_data()
     return True
 
-# -------------------------
-# UI: keyboards (supports Arabic + English toggle)
-# -------------------------
-def create_main_menu(lang="ar"):
+# ---------- daily tries / activity ----------
+def ensure_daily_quota(user):
+    # assign DAILY_TRIES once per 24 hours (based on date)
+    now = datetime.utcnow()
+    last = user.get("last_daily_reset")
+    assign = False
+    if last is None:
+        assign = True
+    else:
+        try:
+            last_dt = datetime.fromisoformat(last)
+            if now - last_dt >= timedelta(hours=24):
+                assign = True
+        except:
+            assign = True
+    if assign:
+        # reset played count and assign base quota
+        user["games_played_today"] = 0
+        user["daily_trie_quota"] = user.get("daily_trie_quota", 0) + DAILY_TRIES
+        user["last_daily_reset"] = now.isoformat()
+        # active days streak processing
+        last_active = user.get("last_active_date")
+        today_date = now.date()
+        if last_active:
+            try:
+                last_date = datetime.fromisoformat(last_active).date()
+                if (today_date - last_date).days == 1:
+                    user["active_days_streak"] = user.get("active_days_streak", 0) + 1
+                elif (today_date - last_date).days == 0:
+                    pass
+                else:
+                    user["active_days_streak"] = 1
+            except:
+                user["active_days_streak"] = 1
+        else:
+            user["active_days_streak"] = 1
+        user["last_active_date"] = now.isoformat()
+        save_user(user)
+
+def user_remaining_tries(user):
+    # remaining = daily_quota - played_today
+    return max(0, int(user.get("daily_trie_quota", 0) - user.get("games_played_today", 0)))
+
+# ---------- keyboards ----------
+def main_menu_kb(lang="ar"):
     kb = InlineKeyboardMarkup(row_width=2)
     if lang == "ar":
         kb.add(
-            InlineKeyboardButton("🎮 الألعاب (3 محاولات)", callback_data="games_menu"),
-            InlineKeyboardButton("📊 الملف الشخصي", callback_data="profile")
+            InlineKeyboardButton("📊 الملف الشخصي", callback_data="profile"),
+            InlineKeyboardButton("🎮 الألعاب", callback_data="games_menu")
         )
         kb.add(
-            InlineKeyboardButton("👥 الإحالات (+1 محاولة)", callback_data="referral"),
-            InlineKeyboardButton("💰 سحب رصيد", callback_data="withdraw")
-        )
-        kb.add(
-            InlineKeyboardButton("🆘 الدعم الفني", url="https://t.me/Trust_wallet_Support_3"),
+            InlineKeyboardButton("🆘 تواصل مع الدعم", url=f"https://t.me/{SUPPORT_USERNAME}"),
             InlineKeyboardButton("💎 باقات VIP", callback_data="vip_packages")
         )
-        kb.add(InlineKeyboardButton("🌐 EN", callback_data="lang_toggle"))
+        kb.add(
+            InlineKeyboardButton("👥 الإحالات", callback_data="referral"),
+            InlineKeyboardButton("🌐 EN", callback_data="lang_toggle")
+        )
     else:
         kb.add(
-            InlineKeyboardButton("🎮 Games (3 tries)", callback_data="games_menu"),
-            InlineKeyboardButton("📊 Profile", callback_data="profile")
+            InlineKeyboardButton("📊 Profile", callback_data="profile"),
+            InlineKeyboardButton("🎮 Games", callback_data="games_menu")
         )
         kb.add(
-            InlineKeyboardButton("👥 Referrals (+1 try)", callback_data="referral"),
-            InlineKeyboardButton("💰 Withdraw", callback_data="withdraw")
-        )
-        kb.add(
-            InlineKeyboardButton("🆘 Support", url="https://t.me/Trust_wallet_Support_3"),
+            InlineKeyboardButton("🆘 Contact Support", url=f"https://t.me/{SUPPORT_USERNAME}"),
             InlineKeyboardButton("💎 VIP Packages", callback_data="vip_packages")
         )
-        kb.add(InlineKeyboardButton("🌐 AR", callback_data="lang_toggle"))
+        kb.add(
+            InlineKeyboardButton("👥 Referrals", callback_data="referral"),
+            InlineKeyboardButton("🌐 AR", callback_data="lang_toggle")
+        )
     return kb
 
-def create_games_menu(lang="ar"):
+def games_menu_kb(lang="ar"):
     kb = InlineKeyboardMarkup(row_width=2)
     if lang == "ar":
         kb.add(
@@ -221,533 +259,505 @@ def create_games_menu(lang="ar"):
         )
     return kb
 
-def create_vip_keyboard(lang="ar"):
+def vip_kb(lang="ar"):
     kb = InlineKeyboardMarkup(row_width=1)
+    # Buttons will open your support username (you handle payment)
+    support_url = f"https://t.me/{SUPPORT_USERNAME}"
     if lang == "ar":
-        kb.add(InlineKeyboardButton("🟢 برونزي - 5 USDT", callback_data="buy_bronze"))
-        kb.add(InlineKeyboardButton("🔵 فضى - 10 USDT", callback_data="buy_silver"))
-        kb.add(InlineKeyboardButton("🟡 ذهبي - 20 USDT", callback_data="buy_gold"))
+        kb.add(InlineKeyboardButton("🟢 برونزي - 5 USDT (اشتري من المبيعات)", url=support_url))
+        kb.add(InlineKeyboardButton("🔵 فضى - 10 USDT (اشتري من المبيعات)", url=support_url))
+        kb.add(InlineKeyboardButton("🟡 ذهبي - 20 USDT (اشتري من المبيعات)", url=support_url))
         kb.add(InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
     else:
-        kb.add(InlineKeyboardButton("🟢 Bronze - 5 USDT", callback_data="buy_bronze"))
-        kb.add(InlineKeyboardButton("🔵 Silver - 10 USDT", callback_data="buy_silver"))
-        kb.add(InlineKeyboardButton("🟡 Gold - 20 USDT", callback_data="buy_gold"))
+        kb.add(InlineKeyboardButton("🟢 Bronze - 5 USDT (buy via support)", url=support_url))
+        kb.add(InlineKeyboardButton("🔵 Silver - 10 USDT (buy via support)", url=support_url))
+        kb.add(InlineKeyboardButton("🟡 Gold - 20 USDT (buy via support)", url=support_url))
         kb.add(InlineKeyboardButton("🔙 Back", callback_data="main_menu"))
     return kb
 
-def create_withdraw_keyboard(lang="ar"):
-    kb = InlineKeyboardMarkup()
-    if lang == "ar":
-        kb.add(InlineKeyboardButton("💳 تأكيد استخدام BEP20", callback_data="confirm_bep20"))
-        kb.add(InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
+def withdraw_kb(user, lang="ar"):
+    kb = InlineKeyboardMarkup(row_width=1)
+    # show confirm only if eligible or alternate goal met
+    eligible = (user.get("balance", 0.0) >= MIN_WITHDRAW_BALANCE and user.get("referrals_count", 0) >= MIN_WITHDRAW_REFERRALS and user.get("active_days_streak", 0) >= 7)
+    alt_ok = (user.get("balance", 0.0) >= MIN_WITHDRAW_BALANCE and user.get("referrals_count", 0) >= ALT_REFERRAL_GOAL)
+    if eligible:
+        kb.add(InlineKeyboardButton("💳 تأكيد طلب السحب", callback_data="confirm_withdraw"))
     else:
-        kb.add(InlineKeyboardButton("💳 Confirm BEP20", callback_data="confirm_bep20"))
-        kb.add(InlineKeyboardButton("🔙 Back", callback_data="main_menu"))
+        if lang == "ar":
+            kb.add(InlineKeyboardButton(f"⚠️ شروط السحب: {MIN_WITHDRAW_BALANCE} USDT + {MIN_WITHDRAW_REFERRALS} إحالة + نشاط 7 أيام", callback_data="withdraw_info"))
+            if alt_ok:
+                kb.add(InlineKeyboardButton("🔓 خيار بديل: دعوة 10 أشخاص", callback_data="invite_10_option"))
+        else:
+            kb.add(InlineKeyboardButton(f"⚠️ Withdraw reqs: {MIN_WITHDRAW_BALANCE} USDT + {MIN_WITHDRAW_REFERRALS} refs + 7 days active", callback_data="withdraw_info"))
+            if alt_ok:
+                kb.add(InlineKeyboardButton("🔓 Alternative: invite 10 people", callback_data="invite_10_option"))
+    kb.add(InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
     return kb
 
-def create_referral_keyboard(user_id, lang="ar"):
-    kb = InlineKeyboardMarkup()
-    referral_link = f"https://t.me/BNBMini1Bot?start={user_id}"
+def referral_kb(user_id, lang="ar"):
+    kb = InlineKeyboardMarkup(row_width=1)
+    link = f"https://t.me/BNBMini1Bot?start={user_id}"
     if lang == "ar":
-        kb.add(InlineKeyboardButton("📤 مشاركة الرابط", url=f"https://t.me/share/url?url={referral_link}&text=انضم إلى هذا البوت واحصل على 1.0 USDT!"))
+        kb.add(InlineKeyboardButton("📤 مشاركة الرابط", url=f"https://t.me/share/url?url={link}&text=انضم واحصل على 0.75 USDT!"))
         kb.add(InlineKeyboardButton("🔗 نسخ الرابط", callback_data="copy_link"))
         kb.add(InlineKeyboardButton("📊 إحالاتي", callback_data="my_referrals"))
-        kb.add(InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu"))
+        kb.add(InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
     else:
-        kb.add(InlineKeyboardButton("📤 Share link", url=f"https://t.me/share/url?url={referral_link}&text=Join this bot and get 1.0 USDT!"))
+        kb.add(InlineKeyboardButton("📤 Share link", url=f"https://t.me/share/url?url={link}&text=Join and get 0.75 USDT!"))
         kb.add(InlineKeyboardButton("🔗 Copy link", callback_data="copy_link"))
         kb.add(InlineKeyboardButton("📊 My referrals", callback_data="my_referrals"))
-        kb.add(InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu"))
-    return kb, referral_link
+        kb.add(InlineKeyboardButton("🔙 Back", callback_data="main_menu"))
+    return kb, link
 
-# -------------------------
-# Games logic (unchanged behavior)
-# -------------------------
+# ---------- games logic (unchanged) ----------
 def play_slots_game(user_id):
-    symbols = ["🍒", "🍋", "🍊", "🍇", "🔔", "💎"]
-    result = [random.choice(symbols) for _ in range(3)]
-    if result[0] == result[1] == result[2]:
-        win_amount = 5.0
-    elif result[0] == result[1] or result[1] == result[2]:
-        win_amount = 2.0
+    symbols = ["🍒","🍋","🍊","🍇","🔔","💎"]
+    res = [random.choice(symbols) for _ in range(3)]
+    if res[0]==res[1]==res[2]:
+        win = 5.0
+    elif res[0]==res[1] or res[1]==res[2]:
+        win = 2.0
     else:
-        win_amount = 0.0
-    return result, win_amount
+        win = 0.0
+    return res, win
 
 def play_dice_game(user_id):
-    user_dice = random.randint(1,6)
-    bot_dice = random.randint(1,6)
-    if user_dice > bot_dice:
-        result = "فوز"
-        win_amount = 3.0
-    elif user_dice < bot_dice:
-        result = "خسارة"
-        win_amount = 0.0
-    else:
-        result = "تعادل"
-        win_amount = 1.0
-    return user_dice, bot_dice, result, win_amount
+    ud = random.randint(1,6); bd = random.randint(1,6)
+    if ud>bd: return ud, bd, "فوز", 3.0
+    if ud<bd: return ud, bd, "خسارة", 0.0
+    return ud, bd, "تعادل", 1.0
 
 def play_football_game(user_id):
-    outcomes = ["هدف 🥅", "إصابة القائم 🚩", "حارس يصد ⛔"]
-    result = random.choices(outcomes, k=3)
-    win_amount = 2.0 if any("هدف" in s for s in result) else 0.5
-    return result, win_amount
+    outcomes = ["هدف 🥅","إصابة القائم 🚩","حارس يصد ⛔"]
+    r = random.choices(outcomes, k=3)
+    win = 2.0 if any("هدف" in s for s in r) else 0.5
+    return r, win
 
 def play_basketball_game(user_id):
-    shots = []
-    goals = 0
-    for i in range(3):
-        if random.random() > 0.3:
-            shots.append("🎯 تسجيل ✅")
-            goals += 1
-        else:
-            shots.append("🎯 أخطأت ❌")
-    win_amount = goals * 1.0
-    return shots, win_amount
+    shots=[]; goals=0
+    for _ in range(3):
+        if random.random()>0.3: shots.append("🎯 تسجيل ✅"); goals+=1
+        else: shots.append("🎯 أخطأت ❌")
+    return shots, goals*1.0
 
 def play_darts_game(user_id):
-    scores = []
-    total_score = 0
-    for i in range(3):
-        score = random.randint(10,50)
-        scores.append(f"🎯 نقاط: {score}")
-        total_score += score
-    win_amount = total_score / 50.0
-    return scores, win_amount
+    scores=[]; total=0
+    for _ in range(3):
+        s=random.randint(10,50); scores.append(f"🎯 نقاط: {s}"); total+=s
+    return scores, total/50.0
 
-# -------------------------
-# Callback handling (preserve logic, add lang & data save)
-# -------------------------
-@bot.callback_query_handler(func=lambda call: True)
-def handle_callbacks(call):
-    user_id = call.from_user.id
-    user = get_user(user_id)
-    if user.get("banned"):
-        bot.answer_callback_query(call.id, "❌ محظور", show_alert=True)
-        return
-    lang = user.get("lang","ar")
-    data_changed = False
+# ---------- callbacks ----------
+@bot.callback_query_handler(func=lambda c: True)
+def callbacks(c):
+    uid = c.from_user.id
+    user = ensure_user(uid)
+    # ensure daily quota and activity
+    try:
+        ensure_daily_quota(user)
+    except Exception as e:
+        print("ensure_daily_quota error:", e)
+    lang = "ar"
+    changed = False
 
     try:
-        if call.data == "main_menu":
-            txt = (f"🎮 أهلاً {call.from_user.first_name}!\n\n"
-                   f"💰 رصيدك: {user['balance']:.2f} USDT\n👥 إحالات: {user['referrals_count']}\n"
-                   f"🎯 المحاولات: {3 - user['games_played_today']}/3\n💎 VIP: {user['vip_level']}")
-            bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
-                                  text=txt, reply_markup=create_main_menu(lang))
-        elif call.data == "games_menu":
-            bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
-                                  text="🎮 اختر لعبة:", reply_markup=create_games_menu(lang))
-        elif call.data == "profile":
-            txt = (f"📊 الملف الشخصي:\n\n👤 {call.from_user.first_name}\n🆔 {user_id}\n"
-                   f"💰 رصيد: {user['balance']:.2f} USDT\n👥 إحالات: {user['referrals_count']}\n"
-                   f"🎯 محاولات متبقية: {3-user['games_played_today']}\n💎 VIP: {user['vip_level']}")
-            bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
-                                  text=txt, reply_markup=create_main_menu(lang))
-        elif call.data == "referral":
-            kb, link = create_referral_keyboard(user_id, lang)
-            txt = f"👥 نظام الإحالات:\n\n🔗 رابطك: {link}\n📊 لديك {user['referrals_count']} إحالة"
-            bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
-                                  text=txt, reply_markup=kb)
-        elif call.data == "vip_packages":
-            txt = "💎 باقات VIP:\n\n🟢 برونزي - 5 USDT\n🔵 فضى - 10 USDT\n🟡 ذهبي - 20 USDT"
-            bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
-                                  text=txt, reply_markup=create_vip_keyboard(lang))
-        elif call.data == "withdraw":
-            txt = (f"💰 سحب رصيد:\n\n💳 الحد الأدنى: 10 USDT\n📡 الشبكة: BEP20\n💰 رصيدك: {user['balance']:.2f} USDT\n\n"
-                   f"العنوان للمراجعة: {WALLET_ADDRESS}")
-            if user['balance'] >= 10:
-                bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
-                                      text=txt + "\n\n✅ يمكنك السحب الآن", reply_markup=create_withdraw_keyboard(lang))
+        if c.data == "main_menu":
+            remaining = user_remaining_tries(user)
+            vip_name = {0:"عادي",1:"برونزي",2:"فضي",3:"ذهبي"}.get(user.get("vip_level",0),"عادي")
+            txt = (f"📊 الملف الشخصي\n\n👤 المستخدم: {user.get('username') or ('User '+str(uid))}\n"
+                   f"🆔 المعرف: {uid}\n💰 الرصيد: {user.get('balance',0.0):.2f} USDT\n"
+                   f"👥 الإحالات: {user.get('referrals_count',0)} مستخدم\n"
+                   f"📈 الإحالات الجديدة: {user.get('new_referrals_count',0)}/10\n"
+                   f"🏆 مستوى VIP: {vip_name}\n"
+                   f"🎯 المحاولات المتبقية: {remaining} (3 أساسية + {user.get('referrals_count',0)} إضافية)\n\n"
+                   f"⏰ مكافأة التعدين: {'حساب متأخر' if not user.get('last_daily_reset') else next_mining_eta(user)} ⏳\n\n"
+                   f"💎 إجمالي الأرباح: {user.get('total_profits',0.0):.2f} USDT\n"
+                   f"💳 إجمالي الإيداعات: {user.get('total_deposits',0.0):.2f} USDT\n"
+                   f"📅 النشاط المستمر: {user.get('active_days_streak',0)}/7 أيام")
+            bot.edit_message_text(chat_id=c.message.chat.id, message_id=c.message.message_id, text=txt, reply_markup=main_menu_kb(lang))
+
+        elif c.data == "games_menu":
+            bot.edit_message_text(chat_id=c.message.chat.id, message_id=c.message.message_id, text="🎮 اختر لعبة:", reply_markup=games_menu_kb(lang))
+
+        elif c.data == "profile":
+            # show same as main_menu to be consistent
+            bot.answer_callback_query(c.id, "فتح الملف الشخصي...", show_alert=False)
+            bot.edit_message_text(chat_id=c.message.chat.id, message_id=c.message.message_id, text="جاري التحميل...", reply_markup=main_menu_kb(lang))
+
+        elif c.data == "vip_packages":
+            bot.edit_message_text(chat_id=c.message.chat.id, message_id=c.message.message_id, text="💎 باقات VIP", reply_markup=vip_kb(lang))
+
+        elif c.data == "referral":
+            kb, link = referral_kb(uid, lang)
+            bot.edit_message_text(chat_id=c.message.chat.id, message_id=c.message.message_id, text=f"👥 رابط الإحالة الخاص بك:\n{link}", reply_markup=kb)
+
+        elif c.data == "withdraw":
+            kb = withdraw_kb(user, lang)
+            bot.edit_message_text(chat_id=c.message.chat.id, message_id=c.message.message_id, text=f"💰 سحب الرصيد\n• الحد الأدنى: {MIN_WITHDRAW_BALANCE} USDT\n• إحالات مطلوبة: {MIN_WITHDRAW_REFERRALS}\n• نشاط 7 أيام متتالية", reply_markup=kb)
+
+        elif c.data == "withdraw_info":
+            bot.answer_callback_query(c.id, f"السحب: لازم {MIN_WITHDRAW_BALANCE} USDT + {MIN_WITHDRAW_REFERRALS} إحالة + نشاط 7 أيام. بديل: دعوة {ALT_REFERRAL_GOAL} أشخاص إذا رصيدك ≥ {MIN_WITHDRAW_BALANCE}", show_alert=True)
+
+        elif c.data == "invite_10_option":
+            kb, link = referral_kb(uid, lang)
+            bot.edit_message_text(chat_id=c.message.chat.id, message_id=c.message.message_id, text=f"الخيار البديل: ادعُ {ALT_REFERRAL_GOAL} شخص عبر:\n{link}\nبمجرد وصول الإحالات إلى {ALT_REFERRAL_GOAL} سيُفتح خيار السحب.", reply_markup=kb)
+
+        elif c.data == "confirm_withdraw":
+            # check eligibility
+            eligible = (user.get("balance",0.0) >= MIN_WITHDRAW_BALANCE and user.get("referrals_count",0) >= MIN_WITHDRAW_REFERRALS and user.get("active_days_streak",0) >= 7)
+            alt_ok = (user.get("balance",0.0) >= MIN_WITHDRAW_BALANCE and user.get("referrals_count",0) >= ALT_REFERRAL_GOAL)
+            if eligible or alt_ok:
+                user["withdrawal_attempts"] = user.get("withdrawal_attempts",0) + 1
+                save_user(user)
+                bot.answer_callback_query(c.id, "✅ تم تقديم طلب السحب، جاري الإشعار للأدمن", show_alert=True)
+                bot.send_message(ADMIN_ID, f"📥 طلب سحب جديد:\n• user_id: {uid}\n• balance: {user.get('balance'):.2f} USDT\n• referrals: {user.get('referrals_count')}\n• active_days: {user.get('active_days_streak')}\n• vip: {user.get('vip_level')}\n")
+                bot.edit_message_text(chat_id=c.message.chat.id, message_id=c.message.message_id, text="✅ تم إرسال طلب السحب، سيتواصل معك الدعم", reply_markup=main_menu_kb(lang))
             else:
-                bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
-                                      text=txt + f"\n\n❌ تحتاج {10 - user['balance']:.2f} USDT أخرى", reply_markup=create_main_menu(lang))
-        elif call.data.startswith("game_"):
-            if user['games_played_today'] >= 3:
-                bot.answer_callback_query(call.id, "❌ انتهت المحاولات اليوم!", show_alert=True)
+                bot.answer_callback_query(c.id, "❌ لا تستوفي شروط السحب", show_alert=True)
+
+        elif c.data.startswith("game_"):
+            # play game, consume one try if available
+            remaining = user_remaining_tries(user)
+            if remaining <= 0:
+                bot.answer_callback_query(c.id, "❌ لا توجد محاولات متبقية اليوم، اجمع إحالات أو انتظر إعادة المحاولات كل 24 ساعة", show_alert=True)
                 return
-            user['games_played_today'] += 1
-            user['total_games_played'] += 1
-            user['games_counter'] += 1
-            data_changed = True
-            game_type = call.data.replace("game_", "")
+            # consume one "played"
+            user["games_played_today"] = user.get("games_played_today",0) + 1
+            user["total_games_played"] = user.get("total_games_played",0) + 1
+            user["games_counter"] = user.get("games_counter",0) + 1
+            changed = True
+            game_type = c.data.replace("game_","")
             if game_type == "slots":
-                result, win_amount = play_slots_game(user_id)
-                game_result = f"🎰 {' '.join(result)}"
+                res, win = play_slots_game(uid); result_text = f"🎰 {' '.join(res)}"
             elif game_type == "dice":
-                ud, bd, res, win_amount = play_dice_game(user_id)
-                game_result = f"🎲 أنت {ud} vs البوت {bd} - {res}"
+                ud, bd, resu, win = play_dice_game(uid); result_text = f"🎲 أنت {ud} vs البوت {bd} - {resu}"
             elif game_type == "football":
-                resu, win_amount = play_football_game(user_id)
-                game_result = "⚽ " + " | ".join(resu)
+                resu, win = play_football_game(uid); result_text = "⚽ " + " | ".join(resu)
             elif game_type == "basketball":
-                resu, win_amount = play_basketball_game(user_id)
-                game_result = "🏀 " + " | ".join(resu)
+                resu, win = play_basketball_game(uid); result_text = "🏀 " + " | ".join(resu)
             elif game_type == "darts":
-                resu, win_amount = play_darts_game(user_id)
-                game_result = "🎯 " + " | ".join(resu)
+                resu, win = play_darts_game(uid); result_text = "🎯 " + " | ".join(resu)
             else:
-                win_amount = 0
-                game_result = f"🎮 {game_type}"
+                win = 0; result_text = f"🎮 {game_type}"
 
-            if win_amount > 0:
-                add_balance(user_id, win_amount, f"ربح لعبة {game_type}")
-                win_text = f"🎉 ربحت {win_amount} USDT!"
+            if win > 0:
+                add_balance(uid, win, f"Game win {game_type}")
+                win_text = f"\n🎉 ربحت {win} USDT!"
             else:
-                win_text = "😔 لم تربح هذه المرة"
+                win_text = "\n😔 لم تربح هذه المرة"
 
-            if user['games_counter'] >= 3:
-                add_balance(user_id, 5.0, "مكافأة كل 3 محاولات")
-                user['games_counter'] = 0
-                bonus_text = "\n🏆 مبروك! حصلت على مكافأة 5.0 USDT!"
-                data_changed = True
-            else:
-                bonus_text = ""
+            # every 3 games bonus
+            if user.get("games_counter",0) >= 3:
+                add_balance(uid, 5.0, "Bonus every 3 plays")
+                user["games_counter"] = 0
+                win_text += "\n🏆 مبروك! حصلت على مكافأة 5.0 USDT!"
+                changed = True
 
-            remaining = 3 - user['games_played_today']
-            result_text = f"{game_result}\n\n{win_text}{bonus_text}\n\n🎯 المحاولات المتبقية: {remaining}/3\n💰 الرصيد: {user['balance']:.2f} USDT"
-            bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
-                                  text=result_text, reply_markup=create_games_menu(lang))
-        elif call.data in ["buy_bronze", "buy_silver", "buy_gold"]:
-            vip_map = {"buy_bronze": (1,5.0), "buy_silver": (2,10.0), "buy_gold": (3,20.0)}
-            lvl, price = vip_map[call.data]
-            if user['balance'] >= price:
-                user['balance'] = round(user['balance'] - price, 8)
-                user['vip_level'] = lvl
-                user['vip_expiry'] = (datetime.now() + timedelta(days=30)).isoformat()
-                data_changed = True
-                bot.answer_callback_query(call.id, "✅ تم شراء باقة VIP", show_alert=True)
-                bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
-                                      text=f"✅ تم تفعيل باقة VIP!\n💰 رصيدك المتبقي: {user['balance']:.2f} USDT", reply_markup=create_main_menu(lang))
-            else:
-                bot.answer_callback_query(call.id, "❌ رصيدك غير كافٍ", show_alert=True)
-        elif call.data == "confirm_bep20":
-            if user['balance'] >= 10:
-                user['withdrawal_attempts'] += 1
-                data_changed = True
-                bot.answer_callback_query(call.id, "✅ تم استلام طلب السحب", show_alert=True)
-                bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
-                                      text=f"✅ تم استلام طلب سحب {user['balance']:.2f} USDT\n📧 سيتم التواصل خلال 24 ساعة", reply_markup=create_main_menu(lang))
-            else:
-                bot.answer_callback_query(call.id, "❌ الرصيد غير كافٍ", show_alert=True)
-        elif call.data == "copy_link":
-            bot.answer_callback_query(call.id, "✅ تم نسخ رابط الإحالة", show_alert=True)
-        elif call.data == "my_referrals":
-            bot.answer_callback_query(call.id, f"📊 لديك {user['referrals_count']} إحالة", show_alert=True)
-        elif call.data == "lang_toggle":
-            user['lang'] = "en" if user.get("lang","ar") == "ar" else "ar"
-            data_changed = True
-            bot.answer_callback_query(call.id, "🌐 تم تبديل اللغة", show_alert=True)
-            bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
-                                  text="✅ تم تبديل اللغة", reply_markup=create_main_menu(user['lang']))
+            remaining_after = user_remaining_tries(user)
+            bot.edit_message_text(chat_id=c.message.chat.id, message_id=c.message.message_id,
+                                  text=f"{result_text}\n{win_text}\n\n🎯 المحاولات المتبقية: {remaining_after}\n💰 رصيد: {user.get('balance',0.0):.2f} USDT",
+                                  reply_markup=games_menu_kb(lang))
+
+        elif c.data == "lang_toggle":
+            # simple toggle stored per user as username field not required; keep default ar
+            # (for simplicity we keep ar only in many strings; extension possible)
+            bot.answer_callback_query(c.id, "🌐 تم تبديل اللغة (افتراضي الآن عربي)", show_alert=True)
+
+        elif c.data == "copy_link":
+            bot.answer_callback_query(c.id, "✅ استخدم زر المشاركة لنسخ الرابط", show_alert=True)
+
+        elif c.data == "my_referrals":
+            bot.answer_callback_query(c.id, f"📊 لديك {user.get('referrals_count',0)} إحالات", show_alert=True)
+
         else:
-            bot.answer_callback_query(call.id, "✅", show_alert=False)
-    except Exception as e:
-        print(f"callback error: {e}")
-    finally:
-        if data_changed:
-            save_data()
+            bot.answer_callback_query(c.id, "✅", show_alert=False)
 
-# -------------------------
-# Message handlers / commands
-# -------------------------
+    except Exception as e:
+        print("callback error:", e)
+    finally:
+        if changed:
+            save_user(user)
+
+# helper to show mining ETA (simple estimate: 24h since last reset)
+def next_mining_eta(user):
+    last = user.get("last_daily_reset")
+    if not last:
+        return "جاهز خلال 24س"
+    try:
+        last_dt = datetime.fromisoformat(last)
+        delta = timedelta(hours=24) - (datetime.utcnow() - last_dt)
+        seconds = int(delta.total_seconds())
+        if seconds <= 0:
+            return "جاهز الآن"
+        h = seconds // 3600; m = (seconds % 3600) // 60
+        return f"{h}س {m}د"
+    except:
+        return "جاهز خلال 24س"
+
+# ---------- message handlers ----------
 @bot.message_handler(commands=['start'])
-def cmd_start(message):
-    user_id = message.from_user.id
-    user = get_user(user_id)
-    if user.get("banned"):
-        bot.send_message(message.chat.id, "❌ حسابك محظور.")
-        return
-    ref_bonus = 0.0
-    # check referral code in /start <ref>
-    parts = message.text.split()
+def cmd_start(m):
+    uid = m.from_user.id
+    # if referral code used
+    parts = m.text.split()
+    ref_bonus = 0
     if len(parts) > 1:
         try:
             ref = int(parts[1])
-            if ref != user_id and add_referral(ref, user_id):
-                ref_bonus = 1.0
+            if ref != uid and add_referral(ref, uid):
+                ref_bonus = 0.75
         except:
             pass
-    # update names
-    if not user.get("first_name"):
-        user["first_name"] = message.from_user.first_name or ""
+    user = ensure_user(uid)
     if not user.get("username"):
-        user["username"] = message.from_user.username or ""
-    if ref_bonus > 0:
-        user["balance"] = round(user.get("balance",0.0) + ref_bonus, 8)
+        user["username"] = m.from_user.username or ""
+    if ref_bonus:
+        add_balance(uid, ref_bonus, "Referral join bonus")
+    ensure_daily_quota(user)
     save_user(user)
-    lang = user.get("lang","ar")
-    if lang == "ar":
-        txt = f"🎮 أهلاً {message.from_user.first_name}!\n🎯 لديك 3 محاولات مجانية\n💰 مكافأة الإحالة: 1.0 USDT\n🏆 اربح 5 USDT كل 3 محاولات!"
-    else:
-        txt = f"🎮 Welcome {message.from_user.first_name}!\n🎯 You have 3 free tries\n💰 Referral bonus: 1.0 USDT\n🏆 Win 5 USDT every 3 tries!"
-    bot.send_message(message.chat.id, txt, reply_markup=create_main_menu(lang))
+    bot.send_message(m.chat.id, f"🎮 أهلاً {m.from_user.first_name}!\nاستخدم الأزرار لبدء اللعب.", reply_markup=main_menu_kb("ar"))
 
 @bot.message_handler(commands=['test'])
-def cmd_test(message):
-    bot.reply_to(message, "✅ البوت يعمل")
+def cmd_test(m):
+    bot.reply_to(m, "✅ البوت يعمل")
 
 @bot.message_handler(commands=['myid'])
-def cmd_myid(message):
-    bot.reply_to(message, f"🆔 {message.from_user.id}")
+def cmd_myid(m):
+    bot.reply_to(m, f"🆔 {m.from_user.id}")
 
-# -------------------------
-# Admin utilities
-# -------------------------
+# ---------------- Admin commands (for full manual restore & edits) ----------------
 def is_admin(uid):
     return int(uid) == int(ADMIN_ID)
 
-@bot.message_handler(commands=['broadcast'])
-def cmd_broadcast(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "❌ ليس لديك صلاحية")
-        return
-    parts = message.text.split(maxsplit=1)
-    if len(parts) < 2:
-        bot.reply_to(message, "📝 استخدم: /broadcast نص الرسالة")
-        return
-    text = parts[1]
-    sent = 0
-    with lock:
-        for uid in list(data["users"].keys()):
-            try:
-                u = data["users"][uid]
-                if u.get("banned"):
-                    continue
-                bot.send_message(int(uid), text)
-                sent += 1
-            except:
-                pass
-    bot.reply_to(message, f"📤 تم الإرسال لـ {sent} مستخدم")
+@bot.message_handler(commands=['setbalance'])
+def cmd_setbalance(m):
+    if not is_admin(m.from_user.id): return bot.reply_to(m, "❌ ليس لديك صلاحية")
+    parts = m.text.split()
+    if len(parts) != 3: return bot.reply_to(m, "❌ استخدم: /setbalance user_id amount")
+    uid, amt = parts[1], float(parts[2])
+    u = ensure_user(uid)
+    old = u.get("balance",0.0); u["balance"]=round(float(amt),8); save_user(u)
+    bot.reply_to(m, f"✅ تم تعديل الرصيد من {old:.2f} → {amt:.2f} USDT")
 
-@bot.message_handler(commands=['ban'])
-def cmd_ban(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "❌ ليس لديك صلاحية")
-        return
-    parts = message.text.split()
-    if len(parts) != 2:
-        bot.reply_to(message, "❌ استخدم: /ban user_id")
-        return
-    uid = parts[1]
-    with lock:
-        u = data["users"].get(str(uid))
-        if u:
-            u["banned"] = True
-            save_data()
-            bot.reply_to(message, f"✅ تم حظر {uid}")
-        else:
-            bot.reply_to(message, "❌ المستخدم غير موجود")
+@bot.message_handler(commands=['setreferrals'])
+def cmd_setreferrals(m):
+    if not is_admin(m.from_user.id): return bot.reply_to(m, "❌ ليس لديك صلاحية")
+    parts = m.text.split()
+    if len(parts)!=3: return bot.reply_to(m, "❌ استخدم: /setreferrals user_id count")
+    uid, cnt = parts[1], int(parts[2]); u = ensure_user(uid); u["referrals_count"]=cnt; save_user(u)
+    bot.reply_to(m, f"✅ تم ضبط الإحالات لـ {uid} إلى {cnt}")
 
-@bot.message_handler(commands=['unban'])
-def cmd_unban(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "❌ ليس لديك صلاحية")
-        return
-    parts = message.text.split()
-    if len(parts) != 2:
-        bot.reply_to(message, "❌ استخدم: /unban user_id")
-        return
-    uid = parts[1]
-    with lock:
-        u = data["users"].get(str(uid))
-        if u:
-            u["banned"] = False
-            save_data()
-            bot.reply_to(message, f"✅ تم فك الحظر عن {uid}")
-        else:
-            bot.reply_to(message, "❌ المستخدم غير موجود")
+@bot.message_handler(commands=['setvip'])
+def cmd_setvip(m):
+    if not is_admin(m.from_user.id): return bot.reply_to(m, "❌ ليس لديك صلاحية")
+    parts=m.text.split()
+    if len(parts)<3: return bot.reply_to(m, "❌ استخدم: /setvip user_id level [days]")
+    uid=int(parts[1]); level=int(parts[2]); days=int(parts[3]) if len(parts)>3 else 30
+    u=ensure_user(uid); u["vip_level"]=level; u["vip_expiry"]=(datetime.utcnow()+timedelta(days=days)).isoformat(); save_user(u)
+    bot.reply_to(m, f"✅ تم تعيين VIP level {level} للمستخدم {uid}")
+
+@bot.message_handler(commands=['setgames'])
+def cmd_setgames(m):
+    if not is_admin(m.from_user.id): return bot.reply_to(m, "❌ ليس لديك صلاحية")
+    parts=m.text.split()
+    if len(parts)!=3: return bot.reply_to(m, "❌ استخدم: /setgames user_id count")
+    uid, cnt = parts[1], int(parts[2]); u=ensure_user(uid); u["games_played_today"]=cnt; save_user(u)
+    bot.reply_to(m, f"✅ تم ضبط محاولات اليوم للمستخدم {uid} إلى {cnt}")
+
+@bot.message_handler(commands=['setprofits'])
+def cmd_setprofits(m):
+    if not is_admin(m.from_user.id): return bot.reply_to(m, "❌ ليس لديك صلاحية")
+    parts=m.text.split()
+    if len(parts)!=3: return bot.reply_to(m, "❌ استخدم: /setprofits user_id amount")
+    uid, amt = parts[1], float(parts[2]); u=ensure_user(uid); u["total_profits"]=round(float(amt),8); save_user(u)
+    bot.reply_to(m, f"✅ تم ضبط إجمالي الأرباح للمستخدم {uid} إلى {amt} USDT")
+
+@bot.message_handler(commands=['setdeposits'])
+def cmd_setdeposits(m):
+    if not is_admin(m.from_user.id): return bot.reply_to(m, "❌ ليس لديك صلاحية")
+    parts=m.text.split()
+    if len(parts)!=3: return bot.reply_to(m, "❌ استخدم: /setdeposits user_id amount")
+    uid, amt = parts[1], float(parts[2]); u=ensure_user(uid); u["total_deposits"]=round(float(amt),8); save_user(u)
+    bot.reply_to(m, f"✅ تم ضبط إجمالي الإيداعات للمستخدم {uid} إلى {amt} USDT")
+
+@bot.message_handler(commands=['setactive'])
+def cmd_setactive(m):
+    if not is_admin(m.from_user.id): return bot.reply_to(m, "❌ ليس لديك صلاحية")
+    parts=m.text.split()
+    if len(parts)!=3: return bot.reply_to(m, "❌ استخدم: /setactive user_id days")
+    uid, days = parts[1], int(parts[2]); u=ensure_user(uid); u["active_days_streak"]=days; save_user(u)
+    bot.reply_to(m, f"✅ تم ضبط نشاط المستخدم {uid} إلى {days} يوم متتالي")
+
+@bot.message_handler(commands=['adduser'])
+def cmd_adduser(m):
+    if not is_admin(m.from_user.id): return bot.reply_to(m, "❌ صلاحية مطلوبة")
+    parts=m.text.split()
+    if len(parts)<3: return bot.reply_to(m, "📝 استخدم: /adduser user_id balance [referrals] [vip_level]")
+    uid=parts[1]; bal=float(parts[2]); refs=int(parts[3]) if len(parts)>3 else 0; vip=int(parts[4]) if len(parts)>4 else 0
+    data["users"][str(uid)] = {
+        "user_id": int(uid),
+        "username": "",
+        "first_name": "مستخدم",
+        "last_name": "",
+        "balance": round(bal,8),
+        "referrals_count": refs,
+        "referrer_id": None,
+        "vip_level": vip,
+        "vip_expiry": None,
+        "games_played_today": 0,
+        "daily_trie_quota": DAILY_TRIES,
+        "last_daily_reset": datetime.utcnow().isoformat(),
+        "total_games_played": 0,
+        "total_earned": bal,
+        "total_deposits": bal,
+        "games_counter": 0,
+        "withdrawal_attempts": 0,
+        "new_referrals_count": 0,
+        "active_days_streak": 0,
+        "last_active_date": None,
+        "registration_date": datetime.utcnow().date().isoformat(),
+        "banned": False,
+        "total_profits": 0.0
+    }
+    save_data()
+    bot.reply_to(m, f"✅ تم إضافة/تحديث المستخدم {uid}")
+
+@bot.message_handler(commands=['userinfo'])
+def cmd_userinfo(m):
+    if not is_admin(m.from_user.id): return bot.reply_to(m, "❌ صلاحية مطلوبة")
+    parts=m.text.split()
+    if len(parts)!=2: return bot.reply_to(m, "❌ استخدم: /userinfo user_id")
+    uid=parts[1]; u=data["users"].get(str(uid))
+    if not u: return bot.reply_to(m, "❌ المستخدم غير موجود")
+    bot.reply_to(m, f"📋 بيانات المستخدم:\n<pre>{json.dumps(u, ensure_ascii=False, indent=2)}</pre>")
 
 @bot.message_handler(commands=['stats'])
-def cmd_stats(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "❌ ليس لديك صلاحية")
-        return
-    with lock:
+def cmd_stats(m):
+    if not is_admin(m.from_user.id): return bot.reply_to(m, "❌ صلاحية مطلوبة")
+    with _lock:
         total_users = len(data["users"])
         total_referrals = len(data["referrals"])
         total_balance = sum(u.get("balance",0.0) for u in data["users"].values())
-    bot.reply_to(message, f"📊 إحصائيات:\n• المستخدمين: {total_users}\n• الإحالات: {total_referrals}\n• مجموع الأرصدة: {total_balance:.2f} USDT")
+    bot.reply_to(m, f"📊 إحصائيات:\n• المستخدمين: {total_users}\n• الإحالات: {total_referrals}\n• مجموع الأرصدة: {total_balance:.2f} USDT")
 
-@bot.message_handler(commands=['userinfo'])
-def cmd_userinfo(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "❌ ليس لديك صلاحية")
-        return
-    parts = message.text.split()
-    if len(parts) != 2:
-        bot.reply_to(message, "❌ استخدم: /userinfo user_id")
-        return
-    uid = parts[1]
-    u = data["users"].get(str(uid))
-    if not u:
-        bot.reply_to(message, "❌ المستخدم غير موجود")
-        return
-    txt = json.dumps(u, ensure_ascii=False, indent=2)
-    bot.reply_to(message, f"📋 بيانات المستخدم:\n<pre>{txt}</pre>")
+@bot.message_handler(commands=['broadcast'])
+def cmd_broadcast(m):
+    if not is_admin(m.from_user.id): return bot.reply_to(m, "❌ صلاحية مطلوبة")
+    parts=m.text.split(maxsplit=1)
+    if len(parts)<2: return bot.reply_to(m, "📝 استخدم: /broadcast نص الرسالة")
+    text=parts[1]; sent=0
+    with _lock:
+        for uid,u in data["users"].items():
+            if u.get("banned"): continue
+            try:
+                bot.send_message(int(uid), text); sent+=1
+            except: pass
+    bot.reply_to(m, f"📤 تم الإرسال لـ {sent} مستخدم")
 
-@bot.message_handler(commands=['setbalance'])
-def cmd_setbalance(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "❌ ليس لديك صلاحية")
-        return
-    parts = message.text.split()
-    if len(parts) != 3:
-        bot.reply_to(message, "❌ استخدم: /setbalance user_id amount")
-        return
-    uid, amt = parts[1], float(parts[2])
-    with lock:
-        u = data["users"].get(str(uid))
-        if not u:
-            bot.reply_to(message, "❌ المستخدم غير موجود")
-            return
-        old = u.get("balance",0.0)
-        u["balance"] = round(float(amt),8)
-        save_data()
-    bot.reply_to(message, f"✅ تم تعديل الرصيد من {old:.2f} → {amt:.2f} USDT")
+@bot.message_handler(commands=['ban'])
+def cmd_ban(m):
+    if not is_admin(m.from_user.id): return bot.reply_to(m, "❌ صلاحية مطلوبة")
+    parts=m.text.split()
+    if len(parts)!=2: return bot.reply_to(m, "❌ استخدم: /ban user_id")
+    uid=parts[1]; u=data["users"].get(str(uid))
+    if not u: return bot.reply_to(m, "❌ المستخدم غير موجود")
+    u["banned"]=True; save_data(); bot.reply_to(m, f"✅ تم حظر {uid}")
 
-@bot.message_handler(commands=['adduser'])
-def cmd_adduser(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "❌ ليس لديك صلاحية")
-        return
-    parts = message.text.split()
-    # /adduser user_id balance [referrals] [vip_level]
-    if len(parts) < 3:
-        bot.reply_to(message, "📝 استخدم: /adduser user_id balance [referrals] [vip_level]")
-        return
-    uid = parts[1]
-    balance = float(parts[2])
-    referrals = int(parts[3]) if len(parts) > 3 else 0
-    vip = int(parts[4]) if len(parts) > 4 else 0
-    with lock:
-        data["users"][str(uid)] = {
-            "user_id": int(uid),
-            "username": "",
-            "first_name": "مستخدم",
-            "last_name": "",
-            "balance": round(balance,8),
-            "referrals_count": referrals,
-            "referrer_id": None,
-            "vip_level": vip,
-            "vip_expiry": None,
-            "games_played_today": 0,
-            "total_games_played": 0,
-            "total_earned": 0.0,
-            "total_deposits": balance,
-            "games_counter": 0,
-            "last_daily_bonus": None,
-            "withdrawal_attempts": 0,
-            "new_referrals_count": 0,
-            "lang": "ar",
-            "banned": False,
-            "registration_date": datetime.now().isoformat()
-        }
-        save_data()
-    bot.reply_to(message, f"✅ تم إضافة/تحديث المستخدم {uid}")
+@bot.message_handler(commands=['unban'])
+def cmd_unban(m):
+    if not is_admin(m.from_user.id): return bot.reply_to(m, "❌ صلاحية مطلوبة")
+    parts=m.text.split()
+    if len(parts)!=2: return bot.reply_to(m, "❌ استخدم: /unban user_id")
+    uid=parts[1]; u=data["users"].get(str(uid))
+    if not u: return bot.reply_to(m, "❌ المستخدم غير موجود")
+    u["banned"]=False; save_data(); bot.reply_to(m, f"✅ تم فك الحظر عن {uid}")
 
 @bot.message_handler(commands=['exportdata'])
-def cmd_exportdata(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "❌ ليس لديك صلاحية")
-        return
+def cmd_exportdata(m):
+    if not is_admin(m.from_user.id): return bot.reply_to(m, "❌ صلاحية مطلوبة")
     try:
         save_data()
         with open(DATA_FILE, "rb") as f:
-            bot.send_document(message.from_user.id, f, caption=f"Backup at {datetime.now().isoformat()}")
-        bot.reply_to(message, "✅ تم إرسال النسخة الاحتياطية إليك")
+            bot.send_document(m.from_user.id, f, caption=f"Backup {datetime.utcnow().isoformat()}")
+        bot.reply_to(m, "✅ تم إرسال النسخة الاحتياطية")
     except Exception as e:
-        bot.reply_to(message, f"❌ فشل إرسال النسخة: {e}")
+        bot.reply_to(m, f"❌ فشل: {e}")
 
 @bot.message_handler(commands=['importdata'])
-def cmd_importdata(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "❌ ليس لديك صلاحية")
-        return
-    if message.reply_to_message and message.reply_to_message.document:
+def cmd_importdata(m):
+    if not is_admin(m.from_user.id): return bot.reply_to(m, "❌ صلاحية مطلوبة")
+    if m.reply_to_message and m.reply_to_message.document:
         try:
-            file_info = bot.get_file(message.reply_to_message.document.file_id)
+            file_info = bot.get_file(m.reply_to_message.document.file_id)
             downloaded = bot.download_file(file_info.file_path)
             with open(DATA_FILE, "wb") as f:
                 f.write(downloaded)
             load_data()
-            bot.reply_to(message, "✅ تم استيراد البيانات بنجاح")
+            bot.reply_to(m, "✅ تم استيراد البيانات")
         except Exception as e:
-            bot.reply_to(message, f"❌ فشل الاستيراد: {e}")
+            bot.reply_to(m, f"❌ فشل الاستيراد: {e}")
     else:
-        bot.reply_to(message, "📝 رد على ملف JSON ثم استخدم /importdata")
+        bot.reply_to(m, "📝 رد على ملف JSON ثم استخدم /importdata")
 
 @bot.message_handler(commands=['backupnow'])
-def cmd_backupnow(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "❌ ليس لديك صلاحية")
-        return
+def cmd_backupnow(m):
+    if not is_admin(m.from_user.id): return bot.reply_to(m, "❌ صلاحية مطلوبة")
     try:
         save_data()
-        with lock:
-            bk = {"timestamp": datetime.now().isoformat(), "users_count": len(data["users"])}
-            data["backups"].append(bk)
-            save_data()
+        with _lock:
+            bk = {"timestamp": datetime.utcnow().isoformat(), "users_count": len(data["users"])}
+            data["backups"].append(bk); save_data()
         with open(DATA_FILE, "rb") as f:
-            bot.send_document(message.from_user.id, f, caption="Manual backup")
-        bot.reply_to(message, "✅ Backup created and sent")
+            bot.send_document(m.from_user.id, f, caption="Manual backup")
+        bot.reply_to(m, "✅ Backup created and sent")
     except Exception as e:
-        bot.reply_to(message, f"❌ Error: {e}")
+        bot.reply_to(m, f"❌ Error: {e}")
 
-# catch-all simple reply handler
+# fallback handler
 @bot.message_handler(func=lambda m: True)
-def echo_all(message):
-    if message.from_user and str(message.from_user.id) in data["users"] and data["users"][str(message.from_user.id)].get("banned"):
-        bot.reply_to(message, "❌ محظور")
-        return
-    bot.reply_to(message, f"📝 تم الاستلام: {message.text}")
+def catch_all(m):
+    u = ensure_user(m.from_user.id)
+    if u.get("banned"):
+        bot.reply_to(m, "❌ محظور"); return
+    bot.reply_to(m, "📝 استلمت: " + (m.text or ""))
 
-# -------------------------
-# Flask routes (webhook + health)
-# -------------------------
-@app.route('/')
-def index_page():
-    return "🤖 البوت شغال — استخدم /start في التليجرام."
+# ---------- Flask webhook endpoints ----------
+@app.route("/")
+def index():
+    return "Bot is running", 200
 
-@app.route('/health')
-def health():
-    return {"status": "healthy", "users": len(data["users"]), "timestamp": datetime.now().isoformat()}
-
-@app.route(f'/{BOT_TOKEN}', methods=['POST'])
-def webhook_endpoint():
-    if request.headers.get('content-type') == 'application/json':
+@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+def webhook():
+    if request.headers.get("content-type") == "application/json":
         try:
-            update = telebot.types.Update.de_json(request.data.decode('utf-8'))
+            update = telebot.types.Update.de_json(request.data.decode("utf-8"))
             bot.process_new_updates([update])
             return "OK", 200
         except Exception as e:
-            print(f"Webhook processing error: {e}")
+            print("webhook processing error:", e)
             return "Error", 500
     return "Forbidden", 403
 
-# set webhook when app is ready
-@app.before_first_request
+# ensure webhook once (Flask >=2.3 compatibility)
 def setup_webhook():
     try:
-        bot.remove_webhook()
-        time.sleep(1)
+        bot.remove_webhook(); time.sleep(1)
         webhook_url = f"https://usdt-bot-live.onrender.com/{BOT_TOKEN}"
         bot.set_webhook(url=webhook_url)
-        print(f"✅ Webhook set to: {webhook_url}")
+        print("✅ Webhook set to:", webhook_url)
     except Exception as e:
-        print(f"❌ Failed to set webhook: {e}")
+        print("❌ setup_webhook error:", e)
 
-# -------------------------
-# STARTUP
-# -------------------------
+@app.before_request
+def before_any_request():
+    if not getattr(app, "webhook_is_set", False):
+        setup_webhook(); app.webhook_is_set = True
+
+# ---------- startup ----------
 load_data()
-# start autosave thread
-t = threading.Thread(target=autosave_worker, daemon=True)
+t = threading.Thread(target=autosave_loop, daemon=True)
 t.start()
 
-# gunicorn will use `app` WSGI object in production
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    print(f"Starting local Flask on port {port}")
+    print("Starting on port", port)
     app.run(host="0.0.0.0", port=port)
