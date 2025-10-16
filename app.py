@@ -102,7 +102,7 @@ def ensure_user(uid):
                 "new_referrals_count": 0,
                 "active_days_streak": 0,
                 "last_active_date": None,
-                "registration_date": datetime.utcnow().date().isoformat(),
+                "registration_date": datetime.now().date().isoformat(),
                 "banned": False,
                 "total_profits": 0.0
             }
