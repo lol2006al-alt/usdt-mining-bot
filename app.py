@@ -1,15 +1,12 @@
-# app.py (FINAL) - معدل مع رابط الإحالة ref_ وحل مشكلة Render
-# جاهز للنسخ-اللصق على Render
-# يحوي: حفظ بيانات في database.json، الألعاب، الإحالات، VIP، شروط السحب، أوامر المدير بالعربية.
-
+# app.py (FINAL) - معدل مع إصلاح التوكن
 from flask import Flask, request
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import os, json, time, tempfile, threading, random
 from datetime import datetime, timedelta
 
-# ---------------- CONFIG (لا تغير) ----------------
-BOT_TOKEN = "8385331860:AAHj0uPnpJf_JYtHjALIkmavsBNnpa_Gd2Y"
+# ---------------- CONFIG (تأكد من التوكن) ----------------
+BOT_TOKEN = "8385331860:AAHj0uPnpJf_JYtHjALIkmavsBNnpa_Gd2Y"  # تأكد من هذا السطر!
 ADMIN_ID = 8400225549
 SUPPORT_USERNAME = "Trust_wallet_Support_3"
 DATA_FILE = "database.json"
@@ -18,7 +15,7 @@ WEBHOOK_BASE = "https://usdt-bot-live.onrender.com"
 
 MIN_WITHDRAW_BALANCE = 100.0
 MIN_WITHDRAW_REFERRALS = 15
-MIN_DEPOSIT_FOR_WITHDRAW = 10.0   # إما إيداع >= 10 أو باقة فضية
+MIN_DEPOSIT_FOR_WITHDRAW = 10.0
 ALT_REFERRAL_GOAL = 10
 DAILY_TRIES = 3
 REFERRAL_BONUS_AMOUNT = 0.75
@@ -256,7 +253,6 @@ def withdraw_kb(user):
 
 def referral_kb(user_id):
     kb = InlineKeyboardMarkup(row_width=1)
-    # التعديل هنا: إضافة ref_ قبل user_id
     link = f"https://t.me/BNBMini1Bot?start=ref_{user_id}"
     kb.add(InlineKeyboardButton("📤 مشاركة الرابط", url=f"https://t.me/share/url?url={link}&text=انضم واحصل على 0.75 USDT!"))
     kb.add(InlineKeyboardButton("🔗 نسخ الرابط", callback_data="copy_link"))
@@ -447,7 +443,6 @@ def cmd_start(m):
     ref_bonus = 0
     if len(parts) > 1:
         try:
-            # التعديل هنا: التعامل مع ref_userid
             ref_param = parts[1]
             if ref_param.startswith("ref_"):
                 ref = int(ref_param.replace("ref_", ""))
