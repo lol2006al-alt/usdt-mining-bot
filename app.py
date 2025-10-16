@@ -1,4 +1,4 @@
-# app.py (FINAL)
+# app.py (FINAL) - معدل مع رابط الإحالة ref_ وحل مشكلة Render
 # جاهز للنسخ-اللصق على Render
 # يحوي: حفظ بيانات في database.json، الألعاب، الإحالات، VIP، شروط السحب، أوامر المدير بالعربية.
 
@@ -248,7 +248,7 @@ def withdraw_kb(user):
     if eligible:
         kb.add(InlineKeyboardButton("💳 تأكيد طلب السحب", callback_data="confirm_withdraw"))
     else:
-        kb.add(InlineKeyboardButton(f"⚠️ شروط السحب: {MIN_WITHDRAW_BALANCE} USDT + {MIN_WITHDRAW_REFERRALS} إحالات + 7 أيام نشاط + (إيداع ≥ {MIN_DEPOSIT_FOR_WITHDRAW} أو باقة فضية)", callback_data="withdraw_info"))
+        kb.add(InlineKeyboardButton(f"⚠️ شروط السحب: {MIN_WITHDRAW_BALANCE} USDT + {MIN_WITHDRAW_REFERRALS} إحالات + 7 أيام نشط + (إيداع ≥ {MIN_DEPOSIT_FOR_WITHDRAW} أو باقة فضية)", callback_data="withdraw_info"))
         if alt_ok:
             kb.add(InlineKeyboardButton(f"🔓 خيار بديل: دعوة {ALT_REFERRAL_GOAL} شخص", callback_data="invite_10_option"))
     kb.add(InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
@@ -256,7 +256,8 @@ def withdraw_kb(user):
 
 def referral_kb(user_id):
     kb = InlineKeyboardMarkup(row_width=1)
-    link = f"https://t.me/BNBMini1Bot?start={user_id}"
+    # التعديل هنا: إضافة ref_ قبل user_id
+    link = f"https://t.me/BNBMini1Bot?start=ref_{user_id}"
     kb.add(InlineKeyboardButton("📤 مشاركة الرابط", url=f"https://t.me/share/url?url={link}&text=انضم واحصل على 0.75 USDT!"))
     kb.add(InlineKeyboardButton("🔗 نسخ الرابط", callback_data="copy_link"))
     kb.add(InlineKeyboardButton("📊 إحالاتي", callback_data="my_referrals"))
@@ -446,11 +447,14 @@ def cmd_start(m):
     ref_bonus = 0
     if len(parts) > 1:
         try:
-            ref = int(parts[1])
-            if ref != uid and add_referral(ref, uid):
-                ref_bonus = 0.75
-        except:
-            pass
+            # التعديل هنا: التعامل مع ref_userid
+            ref_param = parts[1]
+            if ref_param.startswith("ref_"):
+                ref = int(ref_param.replace("ref_", ""))
+                if ref != uid and add_referral(ref, uid):
+                    ref_bonus = 0.75
+        except Exception as e:
+            print("Referral error:", e)
     user = ensure_user(uid)
     if not user.get("username"):
         user["username"] = m.from_user.username or ""
@@ -615,27 +619,29 @@ def webhook_endpoint():
             return "Error", 500
     return "Forbidden", 403
 
-# ensure webhook once (Flask >=2.3 compatibility)
-def setup_webhook():
-    try:
-        bot.remove_webhook(); time.sleep(1)
-        webhook_url = f"{WEBHOOK_BASE}/{BOT_TOKEN}"
-        bot.set_webhook(url=webhook_url)
-        print("✅ Webhook set to:", webhook_url)
-    except Exception as e:
-        print("❌ setup_webhook error:", e)
+# حل مشكلة Render - إعداد Webhook مرة واحدة فقط
+webhook_is_set = False
 
 @app.before_request
-def before_any_request():
-    if not getattr(app, "webhook_is_set", False):
-        setup_webhook(); app.webhook_is_set = True
+def before_first_request():
+    global webhook_is_set
+    if not webhook_is_set:
+        try:
+            bot.remove_webhook()
+            time.sleep(1)
+            webhook_url = f"{WEBHOOK_BASE}/{BOT_TOKEN}"
+            bot.set_webhook(url=webhook_url)
+            print(f"✅ Webhook set to: {webhook_url}")
+            webhook_is_set = True
+        except Exception as e:
+            print(f"❌ Webhook setup error: {e}")
 
 # ---------- startup ----------
-load_data()
-t = threading.Thread(target=autosave_loop, daemon=True)
-t.start()
-
 if __name__ == "__main__":
+    load_data()
+    t = threading.Thread(target=autosave_loop, daemon=True)
+    t.start()
+    
     port = int(os.environ.get("PORT", 10000))
-    print("Starting on port", port)
+    print(f"🚀 Starting on port {port}")
     app.run(host="0.0.0.0", port=port)
