@@ -601,19 +601,26 @@ def catch_all(m):
 def index():
     return "Bot is running", 200
 
-@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+# ⚠️ المسار الجديد البسيط
+@app.route("/webhook", methods=["POST"])
 def webhook_endpoint():
+    print(f"🔔 Webhook received at {datetime.utcnow()}")
+    
     if request.headers.get("content-type") == "application/json":
         try:
-            update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
+            json_data = request.get_data().decode("utf-8")
+            print(f"📨 Raw data received")
+            
+            update = telebot.types.Update.de_json(json_data)
             bot.process_new_updates([update])
+            print("✅ Update processed successfully")
             return "OK", 200
         except Exception as e:
-            print("webhook processing error:", e)
+            print(f"❌ Webhook processing error: {e}")
             return "Error", 500
     return "Forbidden", 403
 
-# حل مشكلة Render - إعداد Webhook مرة واحدة فقط
+# ⚠️ إعداد Webhook جديد
 webhook_is_set = False
 
 @app.before_request
@@ -622,8 +629,9 @@ def before_first_request():
     if not webhook_is_set:
         try:
             bot.remove_webhook()
-            time.sleep(1)
-            webhook_url = f"{WEBHOOK_BASE}/{BOT_TOKEN}"
+            time.sleep(2)
+            # ⚠️ مسار بسيط بدون التوكن
+            webhook_url = f"{WEBHOOK_BASE}/webhook"
             bot.set_webhook(url=webhook_url)
             print(f"✅ Webhook set to: {webhook_url}")
             webhook_is_set = True
